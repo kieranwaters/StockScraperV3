@@ -3,13 +3,15 @@
 // so code
 
 using DataElements;
+using OpenQA.Selenium.Chrome;
+using StockScraperV3;
 using System.Data.SqlClient;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace Nasdaq100FinancialScraper
 {
-    class Program
+    public class Program
     {
         public static readonly string connectionString = "Server=LAPTOP-871MLHAT\\sqlexpress;Database=StockDataScraperDatabase;Integrated Security=True;";
         public static List<SqlCommand> batchedCommands = new List<SqlCommand>();
@@ -35,6 +37,77 @@ namespace Nasdaq100FinancialScraper
                 //await CheckAndFillMissingFinancialYears();
             }
         }
+        public static async Task<List<(int companyId, string companyName, string companySymbol, int cik)>> GetNasdaq100CompaniesFromDatabase()
+        {
+            var companies = new List<(int companyId, string companyName, string companySymbol, int cik)>();
+
+            using (SqlConnection connection = new SqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+
+                string query = "SELECT CompanyID, CompanyName, CompanySymbol, CIK FROM CompaniesList";
+                using (SqlCommand command = new SqlCommand(query, connection))
+                {
+                    using (SqlDataReader reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            int companyId = reader.GetInt32(reader.GetOrdinal("CompanyID"));
+                            string companyName = reader.GetString(reader.GetOrdinal("CompanyName"));
+                            string companySymbol = reader.GetString(reader.GetOrdinal("CompanySymbol"));
+                            int cik = reader.GetInt32(reader.GetOrdinal("CIK"));
+
+                            companies.Add((companyId, companyName, companySymbol, cik));
+                        }
+                    }
+                }
+            }
+            return companies;
+        }
+        public static async Task<string> ScrapeReportsForCompany(string companySymbol)
+        {
+            try
+            {
+                // Fetch company details from the database using companySymbol
+                var companies = await URL.GetNasdaq100CompaniesFromDatabase();
+                var company = companies.FirstOrDefault(c => c.Item3 == companySymbol);  // Use Item3 for companySymbol in tuple
+
+                if (company == default)
+                {
+                    return $"Company with symbol {companySymbol} not found.";
+                }
+
+                int companyId = company.Item1;      // Item1 refers to companyId in the tuple
+                string companyName = company.Item2; // Item2 refers to companyName in the tuple
+
+                // Fetch filings for the company
+                var filingTasks = new[]
+                {
+            URL.GetFilingUrlsForLast10Years(company.Item4.ToString(), "10-K"), // Item4 refers to cik
+            URL.GetFilingUrlsForLast10Years(company.Item4.ToString(), "10-Q")
+        };
+
+                var filings = (await Task.WhenAll(filingTasks)).SelectMany(f => f).ToList();
+
+                if (!filings.Any())
+                {
+                    return $"No filings found for {companySymbol}.";
+                }
+
+                using (ChromeDriver driver = URL.StartNewSession())
+                {
+                    await URL.ProcessFilings(driver, filings, companyName, companySymbol, companyId);
+                }
+
+                return "Process completed successfully.";
+            }
+            catch (Exception ex)
+            {
+                return $"Error while scraping reports for {companySymbol}: {ex.Message}";
+            }
+        }
+
+
 
         public static int CalculateFinancialYear(int companyId, DateTime quarterEndDate, SqlConnection connection, SqlTransaction transaction)
         {

@@ -22,29 +22,30 @@ namespace StockScraperV3
             httpClient.DefaultRequestHeaders.Add("User-Agent", "KieranWaters/1.0 (kierandpwaters@gmail.com)");
         }
         public static async Task RunScraperAsync()
-        {
-            var nasdaq100Companies = await GetNasdaq100CompaniesFromDatabase();
+{
+    var nasdaq100Companies = await GetNasdaq100CompaniesFromDatabase();
             foreach (var company in nasdaq100Companies)
             {
-                //Console.WriteLine($"Starting processing for {company.companyName} ({company.symbol})");
                 var filingTasks = new[]
                 {
-                    GetFilingUrlsForLast10Years(company.cik.ToString(), "10-K"),
-                    GetFilingUrlsForLast10Years(company.cik.ToString(), "10-Q")
-                };
+        GetFilingUrlsForLast10Years(company.cik.ToString(), "10-K"),
+        GetFilingUrlsForLast10Years(company.cik.ToString(), "10-Q")
+    };
                 var filings = (await Task.WhenAll(filingTasks))
                     .SelectMany(f => f) // Flatten the resulting lists
                     .ToList();
+
                 if (!filings.Any())
                 {
                     //Console.WriteLine($"No filings found for {company.companyName} ({company.symbol})");
                     continue; // Skip the company if no filings are found
                 }
+
                 ChromeDriver driver = null;
                 try
                 {
                     driver = StartNewSession();
-                    await ProcessFilings(driver, filings, company.companyName, company.symbol);
+                    await ProcessFilings(driver, filings, company.companyName, company.symbol, company.companyId); // Pass companyId
                 }
                 catch (WebDriverException ex)
                 {
@@ -53,7 +54,7 @@ namespace StockScraperV3
                         //Console.WriteLine("ChromeDriver disconnected. Restarting the session...");
                         driver?.Quit();
                         driver = StartNewSession();
-                        await ProcessFilings(driver, filings, company.companyName, company.symbol);
+                        await ProcessFilings(driver, filings, company.companyName, company.symbol, company.companyId); // Pass companyId
                     }
                     else
                     {
@@ -65,24 +66,16 @@ namespace StockScraperV3
                 {
                     driver?.Quit(); // Ensure ChromeDriver is properly quit in all scenarios
                 }
-            }
+ 
+
         }
-        public static async Task ProcessFilings(ChromeDriver driver, List<(string url, string description)> filings, string companyName, string companySymbol)
+    }
+
+        public static async Task ProcessFilings(ChromeDriver driver, List<(string url, string description)> filings, string companyName, string companySymbol, int companyId)
         {
             // Initialize a counter for tracking parsed reports (quarterly/annual)
             int parsedReportsCount = 0;
             int totalReportsToParse = filings.Count(filing => filing.description.Contains("10-K") || filing.description.Contains("10-Q"));
-
-            int companyId;
-            using (SqlConnection connection = new SqlConnection(connectionString))
-            {
-                connection.Open();
-                using (var command = new SqlCommand("SELECT TOP 1 CompanyID FROM CompaniesList WHERE CompanySymbol = @CompanySymbol", connection))
-                {
-                    command.Parameters.AddWithValue("@CompanySymbol", companySymbol);
-                    companyId = (int)command.ExecuteScalar();
-                }
-            }
 
             foreach (var filing in filings)
             {
@@ -118,9 +111,9 @@ namespace StockScraperV3
                     // Batch Execution
                     await Data.Data.ExecuteBatch();
 
-                    if (!globalEndDate.HasValue)
+                    if (!Program.globalEndDate.HasValue)
                     {
-                        //Console.WriteLine($"[ERROR] globalEndDate is not set after processing XBRL for {description} for {companyName} ({companySymbol})");
+                        // Error handling if globalEndDate is not set
                     }
                 }
 
@@ -133,9 +126,9 @@ namespace StockScraperV3
                     // Set isHtmlParsed to true since HTML was processed successfully
                     isHtmlParsed = true;
 
-                    if (!globalEndDate.HasValue)
+                    if (!Program.globalEndDate.HasValue)
                     {
-                        //Console.WriteLine($"[ERROR] globalEndDate is not set after HTML processing for {companyName} ({companySymbol})");
+                        // Error handling if globalEndDate is not set
                     }
                 }
                 else
@@ -147,28 +140,28 @@ namespace StockScraperV3
                     // Set isHtmlParsed to true if fallback HTML parsing was performed
                     isHtmlParsed = true;
 
-                    if (!globalEndDate.HasValue)
+                    if (!Program.globalEndDate.HasValue)
                     {
-                        //Console.WriteLine($"[ERROR] globalEndDate is not set after fallback HTML parsing for {companyName} ({companySymbol})");
+                        // Error handling if globalEndDate is not set
                     }
                 }
 
                 // Processing Annual or Quarterly Report
-                if (globalEndDate.HasValue)
+                if (Program.globalEndDate.HasValue)
                 {
                     int quarter = 0;  // Default quarter for annual reports
 
                     if (isQuarterlyReport)
                     {
-                        using (SqlConnection connection = new SqlConnection(connectionString))
+                        using (SqlConnection connection = new SqlConnection(Program.connectionString))
                         {
                             connection.Open();
                             using (var transaction = connection.BeginTransaction())
                             {
                                 try
                                 {
-                                    quarter = Data.Data.GetQuarterFromEndDate(globalEndDate.Value, companyId, connection, transaction);
-                                    Data.Data.SaveQuarterData(companyId, globalEndDate.Value, quarter, "QuarterlyReport", 0, isHtmlParsed, isXbrlParsed);
+                                    quarter = Data.Data.GetQuarterFromEndDate(Program.globalEndDate.Value, companyId, connection, transaction);
+                                    Data.Data.SaveQuarterData(companyId, Program.globalEndDate.Value, quarter, "QuarterlyReport", 0, isHtmlParsed, isXbrlParsed);
                                     transaction.Commit();
                                 }
                                 catch (Exception ex)
@@ -181,14 +174,14 @@ namespace StockScraperV3
                     }
                     else
                     {
-                        using (SqlConnection connection = new SqlConnection(connectionString))
+                        using (SqlConnection connection = new SqlConnection(Program.connectionString))
                         {
                             connection.Open();
                             using (var transaction = connection.BeginTransaction())
                             {
                                 try
                                 {
-                                    Data.Data.SaveQuarterData(companyId, globalEndDate.Value, 0, "AnnualReport", 0, isHtmlParsed, isXbrlParsed);
+                                    Data.Data.SaveQuarterData(companyId, Program.globalEndDate.Value, 0, "AnnualReport", 0, isHtmlParsed, isXbrlParsed);
                                     transaction.Commit();
                                 }
                                 catch (Exception ex)
@@ -208,7 +201,7 @@ namespace StockScraperV3
                 {
                     Console.WriteLine($"[INFO] All reports parsed for {companyName} ({companySymbol}). Triggering Q4 calculation.");
 
-                    using (SqlConnection connection = new SqlConnection(connectionString))
+                    using (SqlConnection connection = new SqlConnection(Program.connectionString))
                     {
                         connection.Open();
                         // Call both Q4 calculation methods
@@ -225,6 +218,7 @@ namespace StockScraperV3
             await Data.Data.ExecuteBatch();  // Final batch execution after all filings
             Console.WriteLine($"[INFO] Finished processing all filings for {companyName} ({companySymbol})");
         }
+
 
 
 
