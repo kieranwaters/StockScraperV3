@@ -3,13 +3,14 @@
 // so code
 
 using DataElements;
+using OpenQA.Selenium.Chrome;
 using System.Data.SqlClient;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace Nasdaq100FinancialScraper
 {
-    class Program
+    public class Program
     {
         public static readonly string connectionString = "Server=LAPTOP-871MLHAT\\sqlexpress;Database=StockDataScraperDatabase;Integrated Security=True;";
         public static List<SqlCommand> batchedCommands = new List<SqlCommand>();
@@ -147,6 +148,32 @@ namespace Nasdaq100FinancialScraper
                         await command.ExecuteNonQueryAsync();
                     }
                 }
+            }
+        }
+        public static async Task<string> ScrapeReportsForCompany(string companySymbol)
+        {
+            try
+            {
+                var companyCIK = await StockScraperV3.URL.GetCompanyCIK(companySymbol);
+
+                // Assuming 'RunScraperAsync' method can be modified or reused to scrape a single company
+                var filingUrls = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-K");
+                filingUrls.AddRange(await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-Q"));
+
+                if (filingUrls.Any())
+                {
+                    ChromeDriver driver = StockScraperV3.URL.StartNewSession();
+                    await StockScraperV3.URL.ProcessFilings(driver, filingUrls, companySymbol, companySymbol);
+                    driver.Quit();
+
+                    return $"Successfully scraped {filingUrls.Count} filings for {companySymbol}";
+                }
+
+                return $"No filings found for {companySymbol}";
+            }
+            catch (Exception ex)
+            {
+                return $"Error scraping company {companySymbol}: {ex.Message}";
             }
         }
 

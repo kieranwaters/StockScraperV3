@@ -464,7 +464,7 @@ namespace StockScraperV3
             return date >= quarterStart && date <= quarterEnd;
         }
 
-        private static async Task<string> GetCompanyCIK(string companySymbol)
+        public static async Task<string> GetCompanyCIK(string companySymbol)
         {
             using (SqlConnection connection = new SqlConnection(connectionString))
             {
