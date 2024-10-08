@@ -135,16 +135,16 @@ namespace HTML
                             }
 
                             var elementsOfInterest = FinancialElementLists.HTMLElementsOfInterest;
-                            if (elementsOfInterest.TryGetValue(label, out var elementInfo))
+                            var matchedElement = elementsOfInterest.FirstOrDefault(kvp => kvp.Key.Contains(label));
+
+                            if (matchedElement.Key != null)
                             {
-                                // elementInfo is a tuple, so you can extract columnName and isShares
-                                var (columnName, isShares, isCashFlowStatement, isBalanceSheet) = elementInfo;
+                                var (columnName, isShares, isCashFlowStatement, isBalanceSheet) = matchedElement.Value;
 
                                 var elementNames = elementsOfInterest.Values.Select(v => v.Item1).ToArray();
 
                                 // Now columnName is defined, and you can pass it to SaveToDatabase
                                 Data.Data.SaveToDatabase(columnName, value.ToString(), null, elementNames, null, isAnnualReport, companyName, companySymbol, isHtmlParsed: true);
-                                //Console.WriteLine($"[INFO] Saved data for element {columnName}: {value}");
                             }
                             else
                             {

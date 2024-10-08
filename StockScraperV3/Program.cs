@@ -97,7 +97,6 @@ namespace Nasdaq100FinancialScraper
 
             return clonedCommand;
         }
-
         public static string GetColumnName(string elementName)
         {
             // Check if the element is part of the InstantDateElements or ElementsOfInterest sets (XBRL parsing)
@@ -107,14 +106,19 @@ namespace Nasdaq100FinancialScraper
             }
 
             // Check if the element is part of HTMLElementsOfInterest (HTML parsing)
-            if (FinancialElementLists.HTMLElementsOfInterest.TryGetValue(elementName, out var htmlElement))
+            foreach (var kvp in FinancialElementLists.HTMLElementsOfInterest)
             {
-                return htmlElement.ColumnName; // Get the corresponding column name from the HTML elements dictionary
+                // Check if the elementName matches any string in the key list
+                if (kvp.Key.Contains(elementName))
+                {
+                    return kvp.Value.ColumnName; // Get the corresponding column name
+                }
             }
 
             // Return empty string if no match is found
             return string.Empty;
         }
+
 
         public static async Task StoreCompanyDataInDatabase(List<Data.Data.CompanyInfo> companies)
         {
