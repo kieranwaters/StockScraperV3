@@ -10,20 +10,20 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using StockScraperV3;
-
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.IO;
+using Data;
 
 namespace Nasdaq100FinancialScraper
 {
     public class Program
     {
         public static readonly string connectionString = "Server=DESKTOP-SI08RN8\\SQLEXPRESS;Database=StockDataScraperDatabase;Integrated Security=True;";
-        public static List<SqlCommand> GetLocalBatchedCommands()
-        {
-            return new List<SqlCommand>(); // Create a new list for each task/thread
-        }
-        public static DateTime? globalStartDate = null;
-        public static DateTime? globalEndDate = null;
-        public static DateTime? globalInstantDate = null;
+
+        public static readonly SemaphoreSlim semaphore = new SemaphoreSlim(5, 5); // Allow 5 concurrent ChromeDriver instances
+
         static async Task Main(string[] args)
         {
             try
@@ -32,48 +32,43 @@ namespace Nasdaq100FinancialScraper
             }
             catch (Exception ex)
             {
-                //Console.WriteLine($"[ERROR] Scraping error: {ex.Message}");
+                Console.WriteLine($"[ERROR] Scraping error: {ex.Message}");
             }
             finally
             {
-                //Console.WriteLine("[INFO] Calling CheckAndFillMissingFinancialYears for all companies.");
-                //await CheckAndFillMissingFinancialYears();
+                Console.WriteLine("[INFO] Scraping completed.");
             }
         }
 
-        public static int CalculateFinancialYear(int companyId, DateTime quarterEndDate, SqlConnection connection, SqlTransaction transaction)
+        /// <summary>
+        /// Calculates the fiscal year based on the end date and quarter, consistent with the rest of the program.
+        /// </summary>
+        public static int GetFiscalYear(DateTime endDate, int quarter, DateTime? fiscalYearEndDate = null)
         {
-            DateTime fiscalYearEnd = Data.Data.GetFiscalYearEndForSpecificYear(companyId, quarterEndDate.Year, connection, transaction);
-
-            // Logging fiscal year end to verify correct retrieval
-            Console.WriteLine($"[DEBUG] Retrieved fiscalYearEnd for CompanyID: {companyId}, Year: {quarterEndDate.Year} => {fiscalYearEnd}");
-
-            if (fiscalYearEnd == DateTime.MinValue) // Check if fiscalYearEnd is not set properly
+            if (quarter == 0 && fiscalYearEndDate.HasValue)
             {
-                Console.WriteLine($"[ERROR] fiscalYearEnd could not be retrieved for CompanyID: {companyId}, Year: {quarterEndDate.Year}");
-                // Handle case appropriately - possibly return a default year or indicate an error state
-            }
-
-            DateTime fiscalYearStart = fiscalYearEnd.AddYears(-1).AddDays(1);
-
-            // Logging fiscal year start to verify calculation
-            Console.WriteLine($"[DEBUG] Calculated fiscalYearStart for CompanyID: {companyId}, Year: {quarterEndDate.Year} => {fiscalYearStart}");
-
-            if (quarterEndDate >= fiscalYearStart && quarterEndDate <= fiscalYearEnd)
-            {
-                return fiscalYearEnd.Year;
-            }
-            else if (quarterEndDate < fiscalYearStart)
-            {
-                return fiscalYearEnd.Year - 1;
+                // For annual reports, fiscal year is the year of the adjusted fiscal year end date
+                return fiscalYearEndDate.Value.Year;
             }
             else
             {
-                return fiscalYearEnd.Year + 1;
+                // Existing logic for quarterly reports
+                switch (quarter)
+                {
+                    case 1:
+                        return endDate.AddMonths(-9).Year;
+                    case 2:
+                        return endDate.AddMonths(-6).Year;
+                    case 3:
+                        return endDate.AddMonths(-3).Year;
+                    case 4:
+                        return endDate.Year;
+                    default:
+                        throw new ArgumentException("Invalid quarter value", nameof(quarter));
+                }
             }
         }
 
-        
         private static SqlCommand CloneCommand(SqlCommand originalCommand)
         {
             SqlCommand clonedCommand = new SqlCommand
@@ -89,6 +84,7 @@ namespace Nasdaq100FinancialScraper
 
             return clonedCommand;
         }
+
         public static string GetColumnName(string elementName)
         {
             // Check if the element is part of the InstantDateElements or ElementsOfInterest sets (XBRL parsing)
@@ -110,6 +106,7 @@ namespace Nasdaq100FinancialScraper
             // Return empty string if no match is found
             return string.Empty;
         }
+
         public static async Task StoreCompanyDataInDatabase(List<Data.Data.CompanyInfo> companies)
         {
             using (SqlConnection connection = new SqlConnection(connectionString))
@@ -143,6 +140,7 @@ namespace Nasdaq100FinancialScraper
                 }
             }
         }
+
         public static async Task<string> ScrapeReportsForCompany(string companySymbol)
         {
             try
@@ -158,9 +156,6 @@ namespace Nasdaq100FinancialScraper
 
                 if (filingUrls.Any())
                 {
-                    // Use the global semaphore
-                    var semaphore = Program.semaphore;
-
                     ChromeDriver driver = null;
 
                     try
@@ -193,7 +188,7 @@ namespace Nasdaq100FinancialScraper
                             semaphore);
 
                         // Execute batched commands after processing filings
-                        await Data.Data.ExecuteBatch(localBatchedCommands);
+                        await Data.Data.ExecuteBatch(localBatchedCommands, connectionString);
                     }
                     finally
                     {
@@ -211,6 +206,7 @@ namespace Nasdaq100FinancialScraper
                 return $"Error scraping company {companySymbol}: {ex.Message}";
             }
         }
+
         private static async Task UpdateFinancialYear(int companyId, int year, int quarter, int financialYear, SqlConnection connection)
         {
             string updateQuery = @"
@@ -228,39 +224,46 @@ namespace Nasdaq100FinancialScraper
                 await command.ExecuteNonQueryAsync();
             }
         }
-        public static readonly SemaphoreSlim semaphore = new SemaphoreSlim(5, 5); // Allow 5 concurrent ChromeDriver instances
 
         private static async Task ScrapeAndProcessDataAsync()
         {
             try
             {
-                await Data.Data.ProcessUnfinishedRows();
                 var companies = await StockScraperV3.URL.GetNasdaq100CompaniesFromDatabase();
                 var tasks = new List<Task>();
 
                 foreach (var company in companies)
                 {
                     await semaphore.WaitAsync(); // Wait until a slot is available
-                    try
+                    var task = Task.Run(async () =>
                     {
-                        // Pass the entire company object (or tuple) to RunScraperAsync
-                        await StockScraperV3.URL.RunScraperAsync(); // Pass company instead of company.symbol
-                    }
-                    finally
-                    {
-                        semaphore.Release(); // Release the semaphore
-                    }
+                        try
+                        {
+                            // Pass the entire company object to RunScraperAsync
+                            await StockScraperV3.URL.RunScraperAsync(company);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[ERROR] Exception in RunScraperAsync for {company.CompanySymbol}: {ex.Message}");
+                        }
+                        finally
+                        {
+                            semaphore.Release(); // Release the semaphore
+                        }
+                    });
+                    tasks.Add(task);
                 }
 
                 await Task.WhenAll(tasks); // Wait for all tasks to finish
             }
             catch (Exception ex)
             {
-                throw; // Handle exception as needed
+                Console.WriteLine($"[ERROR] Exception in ScrapeAndProcessDataAsync: {ex.Message}");
             }
         }
     }
 }
+
 
 //using DataElements;
 //using OpenQA.Selenium.Chrome;
