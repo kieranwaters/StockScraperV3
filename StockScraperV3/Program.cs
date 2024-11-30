@@ -343,7 +343,7 @@ namespace Nasdaq100FinancialScraper
                     {
                         semaphore.Release(); // Release the semaphore
                     }
-                }
+                }qwerty
 
                 await Task.WhenAll(tasks); // Wait for all tasks to finish
             }
