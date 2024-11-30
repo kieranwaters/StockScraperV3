@@ -38,23 +38,32 @@ namespace Data
             TimeSpan endDateDiff = existingEntry.StandardEndDate - newEntry.StandardEndDate;
             return Math.Abs(startDateDiff.TotalDays) <= leewayDays && Math.Abs(endDateDiff.TotalDays) <= leewayDays;
         }
-        public static int GetFiscalYear(DateTime endDate, int quarter)
+        public static int GetFiscalYear(DateTime endDate, int quarter, DateTime? fiscalYearEndDate)
         {
-            switch (quarter)
+            if (quarter == 0 && fiscalYearEndDate.HasValue)
             {
-                case 1:
-                    return endDate.AddMonths(-9).Year;
-                case 2:
-                    return endDate.AddMonths(-6).Year;
-                case 3:
-                    return endDate.AddMonths(-3).Year;
-                case 4:
-                case 0:
-                    return endDate.Year;
-                default:
-                    throw new ArgumentException("Invalid quarter value", nameof(quarter));
+                // For annual reports, fiscal year is the year of the adjusted fiscal year end date
+                return fiscalYearEndDate.Value.Year;
+            }
+            else
+            {
+                // Existing logic for quarterly reports
+                switch (quarter)
+                {
+                    case 1:
+                        return endDate.AddMonths(-9).Year;
+                    case 2:
+                        return endDate.AddMonths(-6).Year;
+                    case 3:
+                        return endDate.AddMonths(-3).Year;
+                    case 4:
+                        return endDate.Year;
+                    default:
+                        throw new ArgumentException("Invalid quarter value", nameof(quarter));
+                }
             }
         }
+
         private string GenerateKey(FinancialDataEntry entry)
         {
             int fiscalYear = Data.GetFiscalYear(
@@ -63,6 +72,7 @@ namespace Data
             string key = $"{entry.CompanyID}_{fiscalYear}_Q{entry.Quarter}";
             return key;
         }
+
 
         public List<FinancialDataEntry> GetCompletedEntries()// Method to retrieve all completed entries
         {
@@ -77,9 +87,9 @@ namespace Data
         public int Quarter { get; set; }
         public bool IsHtmlParsed { get; set; }
         public bool IsXbrlParsed { get; set; }
+        public DateTime FiscalYearEndDate { get; set; }
         public Dictionary<string, object> FinancialValues { get; set; }
         public Dictionary<string, Type> FinancialValueTypes { get; set; }
-        public DateTime FiscalYearEndDate { get; set; }
         public FinancialDataEntry() // Constructor to initialize dictionaries
         {
             FinancialValues = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
@@ -178,9 +188,9 @@ namespace Data
         {
             var entries = new List<FinancialDataEntry>();
             string query = @"
-    SELECT CompanyID, StartDate, EndDate, Quarter, IsHtmlParsed, IsXbrlParsed, FinancialDataJson
-    FROM FinancialData
-    WHERE CompanyID = @CompanyID";
+SELECT CompanyID, StartDate, EndDate, Quarter, IsHtmlParsed, IsXbrlParsed, FinancialDataJson
+FROM FinancialData
+WHERE CompanyID = @CompanyID";
             using (SqlConnection connection = new SqlConnection(connectionString))
             using (SqlCommand command = new SqlCommand(query, connection))
             {
@@ -198,12 +208,21 @@ namespace Data
                             Quarter = reader.GetInt32(3),
                             IsHtmlParsed = reader.GetBoolean(4),
                             IsXbrlParsed = reader.GetBoolean(5),
-                            FinancialValues = Data.ParseFinancialDataJson(reader.GetString(6))
+                            FinancialValues = Data.ParseFinancialDataJson(reader.GetString(6)),
+                            FiscalYearEndDate = reader.GetDateTime(2) // Assuming EndDate is FiscalYearEndDate
                         };
 
-                        // Calculate and set StandardStartDate and StandardEndDate
-                        int fiscalYear = CompanyFinancialData.GetFiscalYear(entry.EndDate, entry.Quarter);
-                        (entry.StandardStartDate, entry.StandardEndDate) = Data.GetStandardPeriodDates(fiscalYear, entry.Quarter);
+                        // Calculate Fiscal Year based on EndDate, Quarter, and FiscalYearEndDate
+                        int fiscalYear = CompanyFinancialData.GetFiscalYear(
+                            entry.EndDate,
+                            entry.Quarter,
+                            entry.Quarter == 0 ? (DateTime?)entry.FiscalYearEndDate : null);
+
+                        // Get Standard Period Dates based on Fiscal Year, Quarter, and FiscalYearEndDate
+                        (entry.StandardStartDate, entry.StandardEndDate) = Data.GetStandardPeriodDates(
+                            fiscalYear,
+                            entry.Quarter,
+                            entry.Quarter == 0 ? (DateTime?)entry.FiscalYearEndDate : null);
 
                         entries.Add(entry);
                     }
@@ -211,6 +230,8 @@ namespace Data
             }
             return entries;
         }
+
+
 
         public async Task<List<FinancialDataEntry>> GetCompletedEntriesAsync(int companyId)
         {
@@ -426,10 +447,17 @@ namespace Data
         private static void InsertQ4Data(SqlConnection connection, SqlTransaction transaction, int companyId, int year, DateTime startDate, DateTime endDate, Dictionary<string, object> q4Values)
         {
             // Calculate fiscal year based on endDate and quarter
-            int fiscalYear = CompanyFinancialData.GetFiscalYear(endDate, 4); // Quarter 4
+            // Pass fiscalYearEndDate as endDate since quarter == 4
+            int fiscalYear = CompanyFinancialData.GetFiscalYear(
+                endDate,
+                4,
+                (DateTime?)endDate);
 
             // Get standardized period dates for Q4
-            (DateTime standardStartDate, DateTime standardEndDate) = Data.GetStandardPeriodDates(fiscalYear, 4);
+            (DateTime standardStartDate, DateTime standardEndDate) = Data.GetStandardPeriodDates(
+                fiscalYear,
+                4,
+                (DateTime?)endDate);
 
             // Initialize the Q4 FinancialDataEntry with standardized dates
             var q4Entry = new FinancialDataEntry
@@ -442,7 +470,8 @@ namespace Data
                 IsXbrlParsed = true,
                 FinancialValues = q4Values,
                 StandardStartDate = standardStartDate, // Set StandardStartDate
-                StandardEndDate = standardEndDate      // Set StandardEndDate
+                StandardEndDate = standardEndDate,      // Set StandardEndDate
+                FiscalYearEndDate = endDate             // Set FiscalYearEndDate
             };
 
             var entries = new List<FinancialDataEntry> { q4Entry };
@@ -542,7 +571,7 @@ namespace Data
             }
         }
         public static (DateTime periodStart, DateTime periodEnd) GetStandardPeriodDates(
-int fiscalYear, int quarter, DateTime? fiscalYearEndDate = null)
+    int fiscalYear, int quarter, DateTime? fiscalYearEndDate = null)
         {
             DateTime periodStart, periodEnd;
 
@@ -580,6 +609,7 @@ int fiscalYear, int quarter, DateTime? fiscalYearEndDate = null)
 
             return (periodStart, periodEnd);
         }
+
 
         public static DateTime AdjustToNearestQuarterEndDate(DateTime date)
         {
@@ -800,9 +830,15 @@ int fiscalYear, int quarter, DateTime? fiscalYearEndDate = null)
                 row["StartDate"] = entry.StandardStartDate;
                 row["EndDate"] = entry.StandardEndDate;
                 row["Quarter"] = entry.Quarter;
-                int year = CompanyFinancialData.GetFiscalYear(entry.StandardEndDate, entry.Quarter);
-                //row["Year"] = year;
-                row["Year"] = entry.FiscalYearEndDate;
+
+                // Calculate Fiscal Year based on EndDate, Quarter, and FiscalYearEndDate
+                int fiscalYear = CompanyFinancialData.GetFiscalYear(
+                    entry.StandardEndDate,
+                    entry.Quarter,
+                    entry.Quarter == 0 ? (DateTime?)entry.FiscalYearEndDate : null);
+
+                row["Year"] = fiscalYear; // Set Year as an integer
+
                 row["FinancialDataJson"] = JsonConvert.SerializeObject(entry.FinancialValues);
                 row["IsHtmlParsed"] = entry.IsHtmlParsed;
                 row["IsXbrlParsed"] = entry.IsXbrlParsed;

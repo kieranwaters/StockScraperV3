@@ -209,12 +209,12 @@ namespace HTML
         /// Parses the HTML content and extracts financial data entries.
         /// </summary>
         public static async Task<List<string>> ParseHtmlForElementsOfInterest(
-            string htmlContent,
-            bool isAnnualReport,
-            string companyName,
-            string companySymbol,
-            int companyId,
-            DataNonStatic dataNonStatic)
+     string htmlContent,
+     bool isAnnualReport,
+     string companyName,
+     string companySymbol,
+     int companyId,
+     DataNonStatic dataNonStatic)
         {
             var elements = new List<string>(); // This will store parsed elements
             try
@@ -258,10 +258,17 @@ namespace HTML
                     int quarter = isAnnualReport ? 0 : await DetermineQuarter(companyId, adjustedFiscalYearEndDate);
 
                     // Calculate Fiscal Year based on EndDate and Quarter
-                    int fiscalYear = Data.CompanyFinancialData.GetFiscalYear(adjustedFiscalYearEndDate, quarter);
+                    // Pass fiscalYearEndDate if quarter == 0
+                    int fiscalYear = Data.CompanyFinancialData.GetFiscalYear(
+                        adjustedFiscalYearEndDate,
+                        quarter,
+                        quarter == 0 ? (DateTime?)adjustedFiscalYearEndDate : null);
 
                     // Get Standard Period Dates based on Fiscal Year and Quarter
-                    (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(fiscalYear, quarter, adjustedFiscalYearEndDate);
+                    (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(
+                        fiscalYear,
+                        quarter,
+                        quarter == 0 ? (DateTime?)adjustedFiscalYearEndDate : null);
 
                     // Initialize the FinancialDataEntry with Standard Dates
                     var parsedData = new FinancialDataEntry
@@ -339,6 +346,7 @@ namespace HTML
 
             return elements;
         }
+
 
         /// <summary>
         /// Determines the quarter based on the company's fiscal day and month.

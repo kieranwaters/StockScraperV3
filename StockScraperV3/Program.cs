@@ -335,15 +335,28 @@ namespace Nasdaq100FinancialScraper
                         using (SqlConnection connection = new SqlConnection(connectionString))
                         {
                             await connection.OpenAsync();
-                            // Use company.companyId to call CalculateAndSaveQ4InDatabase for the current company
-                            Data.Data.CalculateAndSaveQ4InDatabase(connection, company.companyId);
+
+                            using (SqlTransaction transaction = connection.BeginTransaction())
+                            {
+                                try
+                                {
+                                    // Use company.companyId to call CalculateAndSaveQ4InDatabase for the current company
+                                    Data.Data.CalculateAndSaveQ4InDatabase(connection, transaction, company.companyId);
+
+                                    transaction.Commit(); // Commit the transaction if successful
+                                }
+                                catch (Exception ex)
+                                {
+                                    transaction.Rollback(); // Rollback the transaction on failure
+                                }
+                            }
                         }
                     }
                     finally
                     {
                         semaphore.Release(); // Release the semaphore
                     }
-                }qwerty
+                }
 
                 await Task.WhenAll(tasks); // Wait for all tasks to finish
             }
@@ -353,6 +366,7 @@ namespace Nasdaq100FinancialScraper
                 throw; // Optionally, handle the exception or re-throw it as needed
             }
         }
+
     }
 }
 
