@@ -143,69 +143,161 @@ namespace Nasdaq100FinancialScraper
 
         public static async Task<string> ScrapeReportsForCompany(string companySymbol)
         {
-            try
-            {
-                // Initialize local batched commands
+            
+                // Initialize local batched commands (if necessary)
                 var localBatchedCommands = new List<SqlCommand>();
 
+                // Retrieve Company CIK (Central Index Key)
                 var companyCIK = await StockScraperV3.URL.GetCompanyCIK(companySymbol);
-
-                // Retrieve filing URLs
-                var filingUrls = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-K");
-                filingUrls.AddRange(await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-Q"));
-
-                if (filingUrls.Any())
+                if (string.IsNullOrEmpty(companyCIK))
                 {
-                    ChromeDriver driver = null;
-
-                    try
-                    {
-                        // Wait on the semaphore before starting
-                        await semaphore.WaitAsync();
-
-                        try
-                        {
-                            driver = StockScraperV3.URL.StartNewSession();
-                        }
-                        catch (Exception ex)
-                        {
-                            semaphore.Release();
-                            throw new Exception("Failed to create ChromeDriver", ex);
-                        }
-
-                        int companyId = await StockScraperV3.URL.GetCompanyIdBySymbol(companySymbol);
-                        int groupIndex = 0;
-
-                        // Pass the semaphore to ProcessFilings
-                        await StockScraperV3.URL.ProcessFilings(
-                            driver,
-                            filingUrls,
-                            companySymbol,
-                            companySymbol,
-                            companyId,
-                            groupIndex,
-                            localBatchedCommands,
-                            semaphore);
-
-                        // Execute batched commands after processing filings
-                        await Data.Data.ExecuteBatch(localBatchedCommands, connectionString);
-                    }
-                    finally
-                    {
-                        driver?.Quit();
-                        semaphore.Release();
-                    }
-
-                    return $"Successfully scraped {filingUrls.Count} filings for {companySymbol}";
+                    return $"Error: Unable to retrieve CIK for company symbol {companySymbol}.";
                 }
 
-                return $"No filings found for {companySymbol}";
-            }
-            catch (Exception ex)
+                // Retrieve filing URLs for the last 10 years for both 10-K and 10-Q reports
+                var filingUrls10K = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-K");
+                var filingUrls10Q = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-Q");
+
+                // Combine both lists
+                var combinedFilingUrls = filingUrls10K.Concat(filingUrls10Q).ToList();
+
+                if (!combinedFilingUrls.Any())
+                {
+                    return $"No filings found for {companySymbol}";
+                }
+
+                // Prepare filings to process without filingType
+                var filingsToProcess = combinedFilingUrls
+                    .Select(f => (f.url, f.description))
+                    .ToList(); // List<(string url, string description)>
+
+                // Initialize a single ChromeDriver instance
+                ChromeDriver driver = null;
+
+                try
+                {
+                    // Initialize ChromeDriver session
+                    driver = StockScraperV3.URL.StartNewSession();
+
+                    // Retrieve company ID
+                    int companyId = await StockScraperV3.URL.GetCompanyIdBySymbol(companySymbol);
+                    if (companyId == 0)
+                    {
+                        return $"Error: Unable to retrieve Company ID for {companySymbol}.";
+                    }
+
+                    // Retrieve company name within the database transaction
+                    using (SqlConnection connection = new SqlConnection(connectionString))
+                    {
+                        await connection.OpenAsync();
+                        using (SqlTransaction transaction = connection.BeginTransaction())
+                        {
+                            try
+                            {
+                                // Implement the missing method GetCompanyNameBySymbol
+                                string companyName = await GetCompanyNameBySymbol(companySymbol, connection, transaction);
+
+                                // Create a shared DataNonStatic instance
+                                var dataNonStatic = new DataNonStatic();
+
+                                // Define the missing int parameter
+                                int someIntParameter = 0; // Assign appropriately based on your method's logic
+
+                                // Process Filings within the transaction
+                                await StockScraperV3.URL.ProcessFilings(
+                                    driver,
+                                    filingsToProcess,   // Correctly typed variable
+                                    companyName,
+                                    companySymbol,
+                                    companyId,
+                                    someIntParameter,   // Provide the missing int parameter
+                                    dataNonStatic);     // Pass the shared DataNonStatic instance
+
+                                // After all filings have been processed and data merged in dataNonStatic
+                                var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(companyId); // Corrected to async method
+
+                                if (completedEntries.Count > 0) // No need for Count() if List<T>
+                                {
+                                    await dataNonStatic.SaveEntriesToDatabaseAsync(companyId, completedEntries);
+                                    Console.WriteLine($"Successfully saved {completedEntries.Count} financial entries for {companyName} ({companySymbol}).");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"[INFO] No completed entries to save for {companyName} ({companySymbol}).");
+                                }
+
+                                // Execute any batched SQL commands within the transaction (if necessary)
+                                if (localBatchedCommands.Any())
+                                {
+                                    await Data.Data.ExecuteBatch(localBatchedCommands, connectionString);
+                                }
+
+                                // Commit the transaction if all operations succeed
+                                transaction.Commit();
+                                Console.WriteLine($"Transaction committed successfully for {companyName} ({companySymbol}).");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[ERROR] Transaction failed for {companySymbol}: {ex.Message}");
+                                // Rollback the transaction on error
+                                try
+                                {
+                                    transaction.Rollback();
+                                    Console.WriteLine($"Transaction rolled back successfully for {companySymbol}.");
+                                }
+                                catch (Exception rollbackEx)
+                                {
+                                    Console.WriteLine($"[ERROR] Rollback failed for {companySymbol}: {rollbackEx.Message}");
+                                }
+                                throw;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Handle exceptions related to ChromeDriver and processing
+                    Console.WriteLine($"[ERROR] Failed to process filings for {companySymbol}: {ex.Message}");
+                    throw;
+                }
+                finally
+                {
+                    // Ensure the ChromeDriver is properly closed
+                    driver?.Quit();
+                }
+
+                int filingCount = filingsToProcess.Count;
+                return $"Successfully scraped {filingCount} filings for {companySymbol}";
+            
+}
+
+
+        /// <summary>
+        /// Retrieves the company name based on the company symbol.
+        /// </summary>
+        /// <param name="companySymbol">The stock symbol of the company.</param>
+        /// <param name="connection">An open SQL connection.</param>
+        /// <param name="transaction">The current SQL transaction.</param>
+        /// <returns>The name of the company.</returns>
+        /// <exception cref="Exception">Thrown if the company name cannot be found.</exception>
+        private static async Task<string> GetCompanyNameBySymbol(string companySymbol, SqlConnection connection, SqlTransaction transaction)
+        {
+            string query = "SELECT CompanyName FROM Companies WHERE CompanySymbol = @CompanySymbol";
+            using (SqlCommand cmd = new SqlCommand(query, connection, transaction))
             {
-                return $"Error scraping company {companySymbol}: {ex.Message}";
+                cmd.Parameters.AddWithValue("@CompanySymbol", companySymbol);
+                var result = await cmd.ExecuteScalarAsync();
+                if (result != null && result != DBNull.Value)
+                {
+                    return result.ToString();
+                }
+                else
+                {
+                    throw new Exception($"Company name not found for symbol {companySymbol}.");
+                }
             }
         }
+
 
         private static async Task UpdateFinancialYear(int companyId, int year, int quarter, int financialYear, SqlConnection connection)
         {
@@ -235,23 +327,22 @@ namespace Nasdaq100FinancialScraper
                 foreach (var company in companies)
                 {
                     await semaphore.WaitAsync(); // Wait until a slot is available
-                    var task = Task.Run(async () =>
+                    try
                     {
-                        try
+                        // Run scraper for each company
+                        await StockScraperV3.URL.RunScraperAsync();
+
+                        using (SqlConnection connection = new SqlConnection(connectionString))
                         {
-                            // Pass the entire company object to RunScraperAsync
-                            await StockScraperV3.URL.RunScraperAsync(company);
+                            await connection.OpenAsync();
+                            // Use company.companyId to call CalculateAndSaveQ4InDatabase for the current company
+                            Data.Data.CalculateAndSaveQ4InDatabase(connection, company.companyId);
                         }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ERROR] Exception in RunScraperAsync for {company.CompanySymbol}: {ex.Message}");
-                        }
-                        finally
-                        {
-                            semaphore.Release(); // Release the semaphore
-                        }
-                    });
-                    tasks.Add(task);
+                    }
+                    finally
+                    {
+                        semaphore.Release(); // Release the semaphore
+                    }
                 }
 
                 await Task.WhenAll(tasks); // Wait for all tasks to finish
@@ -259,6 +350,7 @@ namespace Nasdaq100FinancialScraper
             catch (Exception ex)
             {
                 Console.WriteLine($"[ERROR] Exception in ScrapeAndProcessDataAsync: {ex.Message}");
+                throw; // Optionally, handle the exception or re-throw it as needed
             }
         }
     }

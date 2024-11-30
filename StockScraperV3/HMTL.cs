@@ -98,29 +98,18 @@ namespace HTML
         /// Main method to process interactive data from the given URL.
         /// </summary>
         public static async Task ProcessInteractiveData(
-            string interactiveDataUrl,
-            string companyName,
-            string companySymbol,
-            bool isAnnualReport,
-            string filingUrl,
-            int companyId,
-            DataNonStatic dataNonStatic)
+    ChromeDriver driver, // Added ChromeDriver as the first parameter
+    string interactiveDataUrl,
+    string companyName,
+    string companySymbol,
+    bool isAnnualReport,
+    string filingUrl,
+    int companyId,
+    DataNonStatic dataNonStatic)
         {
-            await driverSemaphore.WaitAsync(); // Acquire a slot for a driver
-            ChromeDriver driver = null;
-
+            var parsedEntries = new List<FinancialDataEntry>(); // List to accumulate parsed entries
             try
             {
-                // Get an available driver from the pool
-                lock (driverPool)
-                {
-                    driver = driverPool.FirstOrDefault(d => d != null && d.SessionId != null);
-                    if (driver == null)
-                    {
-                        throw new InvalidOperationException("No available ChromeDriver instances in the pool.");
-                    }
-                }
-
                 var dataTimer = Stopwatch.StartNew();
                 bool loadedSuccessfully = false;
                 int retries = 0;
@@ -133,7 +122,7 @@ namespace HTML
                     {
                         driver.Navigate().GoToUrl(interactiveDataUrl);
                         var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10));
-                        wait.Until(driver => ((IJavaScriptExecutor)driver).ExecuteScript("return document.readyState").Equals("complete"));
+                        wait.Until(d => ((IJavaScriptExecutor)d).ExecuteScript("return document.readyState").Equals("complete"));
                         loadedSuccessfully = true;
                         await Task.Delay(1000);  // Small delay to ensure page content is fully loaded
 
@@ -215,6 +204,7 @@ namespace HTML
             }
         }
 
+
         /// <summary>
         /// Parses the HTML content and extracts financial data entries.
         /// </summary>
@@ -268,7 +258,7 @@ namespace HTML
                     int quarter = isAnnualReport ? 0 : await DetermineQuarter(companyId, adjustedFiscalYearEndDate);
 
                     // Calculate Fiscal Year based on EndDate and Quarter
-                    int fiscalYear = CompanyFinancialData.GetFiscalYear(adjustedFiscalYearEndDate, quarter, adjustedFiscalYearEndDate);
+                    int fiscalYear = Data.CompanyFinancialData.GetFiscalYear(adjustedFiscalYearEndDate, quarter);
 
                     // Get Standard Period Dates based on Fiscal Year and Quarter
                     (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(fiscalYear, quarter, adjustedFiscalYearEndDate);

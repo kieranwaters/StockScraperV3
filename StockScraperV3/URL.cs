@@ -126,13 +126,13 @@ namespace StockScraperV3
             return normalised;
         }
         public static async Task ProcessFilings(
-        ChromeDriver driver,
-        List<(string url, string description)> filings,
-        string companyName,
-        string companySymbol,
-        int companyId,
-        int groupIndex,
-        DataNonStatic dataNonStatic) // Accept shared DataNonStatic instance
+    ChromeDriver driver,
+    List<(string url, string description)> filings,
+    string companyName,
+    string companySymbol,
+    int companyId,
+    int groupIndex,
+    DataNonStatic dataNonStatic) // Accept shared DataNonStatic instance
         {
             int parsedReportsCount = 0;
             int totalReportsToParse = filings.Count(filing => filing.description.Contains("10-K") || filing.description.Contains("10-Q"));
@@ -156,38 +156,32 @@ namespace StockScraperV3
                         var (xbrlUrl, isIxbrl) = await XBRL.XBRL.GetXbrlUrl(url);
                         if (!string.IsNullOrEmpty(xbrlUrl))
                         {
-                            if (isIxbrl)
-                            {
-                                await XBRL.XBRL.DownloadAndParseXbrlData(
-                                    xbrlUrl,
-                                    isAnnualReport,
-                                    companyName,
-                                    companySymbol,
-                                    async (content, isAnnual, name, symbol) =>
+                            await XBRL.XBRL.DownloadAndParseXbrlData(
+                                xbrlUrl,
+                                isAnnualReport,
+                                companyName,
+                                companySymbol,
+                                async (content, isAnnual, name, symbol) =>
+                                {
+                                    if (isIxbrl)
                                     {
                                         await XBRL.XBRL.ParseInlineXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
-                                    },
-                                    async (content, isAnnual, name, symbol) =>
+                                    }
+                                    else
                                     {
                                         await XBRL.XBRL.ParseTraditionalXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
-                                    });
-                            }
-                            else
-                            {
-                                await XBRL.XBRL.DownloadAndParseXbrlData(
-                                    xbrlUrl,
-                                    isAnnualReport,
-                                    companyName,
-                                    companySymbol,
-                                    async (content, isAnnual, name, symbol) =>
-                                    {
-                                        await XBRL.XBRL.ParseTraditionalXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
-                                    },
-                                    async (content, isAnnual, name, symbol) =>
+                                    }
+                                },
+                                async (content, isAnnual, name, symbol) =>
+                                {
+                                    // This delegate can remain unused or can be used for fallback parsing if necessary
+                                    // For safety, you can leave it empty or log a message
+                                    if (!isIxbrl)
                                     {
                                         await XBRL.XBRL.ParseInlineXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
-                                    });
-                            }
+                                    }
+                                });
+
                             isXbrlParsed = true;
                         }
                         else
@@ -213,7 +207,15 @@ namespace StockScraperV3
                         string? interactiveDataUrl = await URL.GetInteractiveDataUrl(url);
                         if (!string.IsNullOrEmpty(interactiveDataUrl))
                         {
-                            await HTML.HTML.ProcessInteractiveData(driver, interactiveDataUrl, companyName, companySymbol, isAnnualReport, url, companyId, dataNonStatic);
+                            await HTML.HTML.ProcessInteractiveData(
+                                driver, // Ensure driver is passed correctly
+                                interactiveDataUrl,
+                                companyName,
+                                companySymbol,
+                                isAnnualReport,
+                                url,
+                                companyId,
+                                dataNonStatic);
                             isHtmlParsed = true;
                         }
                     }
@@ -264,6 +266,8 @@ namespace StockScraperV3
                 Console.WriteLine($"[INFO] No completed entries to save for {companyName} ({companySymbol}).");
             }
         }
+
+
 
         private static async Task ProcessFilingAsync(
      (string url, string description) filing,
