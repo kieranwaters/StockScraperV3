@@ -1,408 +1,334 @@
-﻿using DataElements;
-using HtmlAgilityPack;
+﻿using Data;
 using System.Data.SqlClient;
-using System.Net.Http;
-using System.Threading.Tasks;
 using System.Xml.Linq;
-using Nasdaq100FinancialScraper;
-using System.Net;
-
-namespace XBRL
+public static async Task ParseTraditionalXbrlContent(
+string xbrlContent,
+bool isAnnualReport,
+string companyName,
+string companySymbol,
+DataNonStatic dataNonStatic,
+int companyId)
 {
-    public static class XBRL
+    var parsedEntries = new List<FinancialDataEntry>();
+    try
     {
-        private static readonly HttpClient httpClient = new HttpClient();  // Reused instance
-
-        static XBRL()
+        // Clean and parse the XBRL content
+        string cleanedContent = CleanXbrlContent(xbrlContent);
+        XDocument xDocument = TryParseXDocument(cleanedContent);
+        if (xDocument == null)
         {
-            httpClient.DefaultRequestHeaders.Add("User-Agent", "KieranWaters/1.0 (kierandpwaters@gmail.com)");
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            Console.WriteLine("[ERROR] Failed to parse XBRL document.");
+            return;
         }
-        public static async Task<string?> GetXbrlUrl(string filingUrl)
+
+        // Define namespaces
+        XNamespace xbrli = "http://www.xbrl.org/2003/instance";
+        XNamespace ix = "http://www.xbrl.org/inlineXBRL/2013-02-12";
+
+        // Extract contexts with non-null IDs
+        var contexts = xDocument.Root?.Descendants()
+            .Where(e => e.Name.LocalName == "context")
+            .Select(e => new { Id = e.Attribute("id")?.Value, Element = e })
+            .Where(x => !string.IsNullOrEmpty(x.Id))
+            .ToDictionary(x => x.Id, x => x.Element);
+
+        if (contexts == null || contexts.Count == 0)
         {
-            string response = await httpClient.GetStringAsync(filingUrl);
-            HtmlDocument doc = new HtmlDocument();
-            doc.LoadHtml(response);
-
-            var xbrlNode = doc.DocumentNode.SelectSingleNode("//a[contains(@href, '_xbrl.xml') or contains(@href, '_htm.xml')]");
-            if (xbrlNode != null)
-            {
-                return $"https://www.sec.gov{xbrlNode.GetAttributeValue("href", string.Empty)}";
-            }
-
-            var txtNode = doc.DocumentNode.SelectSingleNode("//a[contains(@href, '.txt')]");
-            return txtNode != null ? $"https://www.sec.gov{txtNode.GetAttributeValue("href", string.Empty)}" : null;
+            Console.WriteLine("[DEBUG] No contexts found in Traditional XBRL.");
+            return;
         }
-        static XDocument TryParseXDocument(string content)
+
+        // Find all valid end dates from contexts
+        var endDates = contexts.Values
+            .Select(ctx => DateTime.TryParse(
+                ctx.Descendants().FirstOrDefault(e => e.Name.LocalName == "endDate")?.Value,
+                out DateTime date) ? date : (DateTime?)null)
+            .Where(date => date.HasValue)
+            .ToList();
+
+        DateTime? mostRecentEndDate = endDates.Any() ? endDates.Max() : null;
+        if (!mostRecentEndDate.HasValue)
         {
-            try
+            Console.WriteLine("[DEBUG] No valid end dates found in contexts.");
+            return;
+        }
+
+        // Filter contexts to include only those with the most recent end date
+        contexts = contexts
+            .Where(kvp =>
             {
-                return XDocument.Parse(content);
-            }
-            catch (Exception ex)
-            {
-                content = CleanXbrlContent(content);
-                try
+                var ctx = kvp.Value;
+                var endDateStr = ctx.Descendants().FirstOrDefault(e => e.Name.LocalName == "endDate")?.Value;
+                if (DateTime.TryParse(endDateStr, out DateTime endDate))
                 {
-                    return XDocument.Parse(content);
+                    return endDate == mostRecentEndDate.Value;
                 }
-                catch (Exception retryEx)
-                {
+                return false;
+            })
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
-                    return null;
-                }
-            }
+        if (contexts.Count == 0)
+        {
+            Console.WriteLine("[DEBUG] No contexts found with the most recent end date.");
+            return;
         }
 
-        public static async Task ReparseXbrlReports(int companyId, int periodId, string companyName, string companySymbol, List<SqlCommand> batchedCommands)
-        {
-            // Fetch all filings for the last 10 years, including both 10-K and 10-Q filings
-            var filings = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companySymbol, "10-Q");
-            filings.AddRange(await StockScraperV3.URL.GetFilingUrlsForLast10Years(companySymbol, "10-K"));
-
-            // If no filings are found, return early
-            if (!filings.Any())
+        // Extract elements without filtering by elementsOfInterest
+        var elements = xDocument.Descendants()
+            .Where(n => n.Name.Namespace != xbrli && n.Name.Namespace != ix)
+            .Select(n => new
             {
+                RawName = n.Name.LocalName,
+                NormalisedName = string.IsNullOrEmpty(n.Name.LocalName)
+                    ? null
+                    : StockScraperV3.URL.NormaliseElementName(n.Name.LocalName),
+                ContextRef = n.Attribute("contextRef")?.Value,
+                Value = n.Value.Trim(),
+                Decimals = n.Attribute("decimals")?.Value ?? "0"
+            })
+            .Where(e => !string.IsNullOrEmpty(e.Value)
+                        && !string.IsNullOrEmpty(e.ContextRef)
+                        && contexts.ContainsKey(e.ContextRef))
+            .ToList();
+
+        if (elements == null || !elements.Any())
+        {
+            Console.WriteLine("[DEBUG] No financial elements found in Traditional XBRL.");
+            return;
+        }
+
+        using (SqlConnection connection = new SqlConnection(Nasdaq100FinancialScraper.Program.connectionString))
+        {
+            await connection.OpenAsync();
+
+            var mainContext = contexts.Values.FirstOrDefault();
+            if (mainContext == null)
+            {
+                Console.WriteLine("[DEBUG] No main context found.");
                 return;
             }
 
-            // Loop through the filings and process them asynchronously
-            var tasks = filings.Select(async filing =>
+            // Extract dates from the main context
+            DateTime? contextStartDate = DateTime.TryParse(
+                mainContext.Descendants().FirstOrDefault(e => e.Name.LocalName == "startDate")?.Value,
+                out DateTime startDateValue) ? startDateValue : (DateTime?)null;
+            DateTime? contextInstantDate = DateTime.TryParse(
+                mainContext.Descendants().FirstOrDefault(e => e.Name.LocalName == "instant")?.Value,
+                out DateTime instantDateValue) ? instantDateValue : (DateTime?)null;
+
+            // Determine dates for FinancialDataEntry with adjustment
+            DateTime entryEndDate = mostRecentEndDate.Value;
+            DateTime entryStartDate = AdjustStartDate(entryEndDate, contextStartDate, contextInstantDate, isAnnualReport);
+
+            // Calculate the quarter
+            int quarter = isAnnualReport
+                ? 0
+                : Data.Data.CalculateQuarterByFiscalDayMonth(companyId, entryEndDate, connection, null, leewayDays: 15);
+
+            // Initialize the FinancialDataEntry
+            int fiscalYear = CompanyFinancialData.GetFiscalYear(entryEndDate, quarter);
+
+            // Get Standard Period Dates based on Fiscal Year and Quarter
+            (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(fiscalYear, quarter);
+
+            // Initialize the FinancialDataEntry with Standard Dates
+            var parsedData = new FinancialDataEntry
             {
-                // Attempt to get the XBRL URL for each filing
-                string xbrlUrl = await GetXbrlUrl(filing.url);
-                if (!string.IsNullOrEmpty(xbrlUrl))
-                {
-                    try
-                    {
-                        // Reset global dates
-                        Nasdaq100FinancialScraper.Program.globalStartDate = null;
-                        Nasdaq100FinancialScraper.Program.globalEndDate = null;
-                        Nasdaq100FinancialScraper.Program.globalInstantDate = null;
+                CompanyID = companyId,
+                StartDate = entryStartDate,               // Parsed StartDate
+                EndDate = entryEndDate,                   // Parsed EndDate
+                Quarter = quarter,
+                IsHtmlParsed = false,
+                IsXbrlParsed = true,
+                FinancialValues = new Dictionary<string, object>(),
+                FinancialValueTypes = new Dictionary<string, Type>(),
+                StandardStartDate = standardStartDate,    // Set StandardStartDate
+                StandardEndDate = standardEndDate         // Set StandardEndDate
+            };
 
-                        // Download and parse XBRL data for each filing
-                        bool isAnnualReport = filing.description.Contains("10-K");// HERE
-                        await DownloadAndParseXbrlData(xbrlUrl, isAnnualReport, companyName, companySymbol,
-                            ParseTraditionalXbrlContent,
-                            ParseInlineXbrlContent);
-                    }
-                    catch (Exception ex)
-                    {
-                        // Log error if something goes wrong during the reparsing process
-                        Console.WriteLine($"[ERROR] Exception during XBRL reparsing for {companyName} ({companySymbol}): {ex.Message}");
-                    }
-                }
-                else
-                {
-                    // Log if no XBRL URL is found for a filing
-                    Console.WriteLine($"[ERROR] No XBRL URL found for {companyName} ({companySymbol})");
-                }
-            }).ToList();
-
-            // Wait for all tasks to complete
-            await Task.WhenAll(tasks);
-
-            // Update the ParsedFullXBRL column for this company and period using batched commands
-            await UpdateParsedFullXbrlColumn(companyId, periodId, batchedCommands);
-        }
-        private static async Task UpdateParsedFullXbrlColumn(int companyId, int periodId, List<SqlCommand> batchedCommands)
-        {
-            string query = @"
-        UPDATE FinancialData
-        SET ParsedFullXBRL = 'Yes'
-        WHERE CompanyID = @CompanyID AND PeriodID = @PeriodID";
-
-            var command = new SqlCommand(query);
-            command.Parameters.AddWithValue("@CompanyID", companyId);
-            command.Parameters.AddWithValue("@PeriodID", periodId);
-
-            batchedCommands.Add(command);  // Add the command to the provided batchedCommands list
-        }
-
-        public static async Task ParseInlineXbrlContent(string htmlContent, bool isAnnualReport, string companyName, string companySymbol)
-        {
-            try
+            // Assign financial values
+            foreach (var element in elements)
             {
-                var htmlDocument = new HtmlDocument();
-                htmlDocument.LoadHtml(htmlContent);
-
-                var elementsOfInterest = FinancialElementLists.ElementsOfInterest;
-                var contexts = new Dictionary<string, XElement>();
-                var elements = htmlDocument.DocumentNode.Descendants()
-                    .Where(n => n.Name == "ix:nonNumeric" || n.Name == "ix:nonFraction")
-                    .Select(n => new FinancialElementLists.FinancialElement
-                    {
-                        Name = n.GetAttributeValue("name", string.Empty).Split(':').Last(),
-                        ContextRef = n.GetAttributeValue("contextRef", string.Empty),
-                        Value = n.InnerText.Trim()
-                    })
-                    .Where(e => elementsOfInterest.Contains(e.Name) && !string.IsNullOrEmpty(e.Value))
-                    .ToList();
-
-                foreach (var contextNode in htmlDocument.DocumentNode.Descendants("xbrli:context"))
+                if (decimal.TryParse(element.Value, out decimal decimalValue))
                 {
-                    var id = contextNode.GetAttributeValue("id", string.Empty);
-                    if (!string.IsNullOrEmpty(id) && !contexts.ContainsKey(id))
+                    if (!string.IsNullOrEmpty(element.NormalisedName))
                     {
-                        contexts[id] = XElement.Parse(contextNode.OuterHtml);
+                        parsedData.FinancialValues[element.NormalisedName] = decimalValue;
+                        parsedData.FinancialValueTypes[element.NormalisedName] = typeof(decimal);
                     }
-                }
-
-                bool isXbrlParsed = false;
-                if (elements.Any())
-                {
-                    foreach (var element in elements.Where(e => HTML.HTML.IsRelevantPeriod(contexts![e.ContextRef!], isAnnualReport)))
-                    {
-                        var context = contexts[element.ContextRef!];
-
-                        DateTime? contextStartDate = DateTime.TryParse(context.Descendants().FirstOrDefault(e => e.Name.LocalName == "startDate")?.Value, out DateTime startDateValue) ? startDateValue : (DateTime?)null;
-                        DateTime? contextEndDate = DateTime.TryParse(context.Descendants().FirstOrDefault(e => e.Name.LocalName == "endDate")?.Value, out DateTime endDateValue) ? endDateValue : (DateTime?)null;
-                        DateTime? contextInstantDate = DateTime.TryParse(context.Descendants().FirstOrDefault(e => e.Name.LocalName == "instant")?.Value, out DateTime instantDateValue) ? instantDateValue : (DateTime?)null;
-
-                        if (contextInstantDate.HasValue && (!contextStartDate.HasValue || !contextEndDate.HasValue))
-                        {
-                            Nasdaq100FinancialScraper.Program.globalInstantDate = contextInstantDate;
-                            Nasdaq100FinancialScraper.Program.globalEndDate = Nasdaq100FinancialScraper.Program.globalInstantDate;
-
-                            if (isAnnualReport)
-                            {
-                                Nasdaq100FinancialScraper.Program.globalStartDate = Nasdaq100FinancialScraper.Program.globalEndDate?.AddYears(-1);
-                            }
-                            else
-                            {
-                                Nasdaq100FinancialScraper.Program.globalStartDate = Nasdaq100FinancialScraper.Program.globalEndDate?.AddMonths(-3);
-                            }
-                        }
-                        else if (contextStartDate.HasValue && contextEndDate.HasValue)
-                        {
-                            Nasdaq100FinancialScraper.Program.globalStartDate = contextStartDate;
-                            Nasdaq100FinancialScraper.Program.globalEndDate = contextEndDate;
-                        }
-                        else { }
-
-                        var dbColumn = element.Name;
-                        Data.Data.SaveToDatabase(dbColumn, element.Value!, context, elementsOfInterest.ToArray(), elements, isAnnualReport, companyName, companySymbol, isHtmlParsed: false, isXbrlParsed: true, startDate: Nasdaq100FinancialScraper.Program.globalStartDate,endDate: Nasdaq100FinancialScraper.Program.globalEndDate);
-                        isXbrlParsed = true;
-                    }
-                }
-
-                if (!Nasdaq100FinancialScraper.Program.globalEndDate.HasValue)
-                {
-                    Nasdaq100FinancialScraper.Program.globalEndDate = DateTime.Now;  // Fallback to current date if end date is missing
-                }
-                else
-                {
-                    
-                }
-                if (isXbrlParsed)
-                {
-                    Data.Data.SaveToDatabase(string.Empty, string.Empty, null, elementsOfInterest.ToArray(), null, isAnnualReport, companyName, companySymbol, isXbrlParsed: true, startDate: Nasdaq100FinancialScraper.Program.globalStartDate,
-        endDate: Nasdaq100FinancialScraper.Program.globalEndDate);
                 }
             }
-            catch (Exception ex)
+
+            // Add the fully populated FinancialDataEntry to parsedEntries and dataNonStatic
+            parsedEntries.Add(parsedData);
+            await dataNonStatic.AddParsedDataAsync(companyId, parsedData); // Updated to use the asynchronous method
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Exception in ParseTraditionalXbrlContent: {ex.Message}");
+    }
+
+    await Task.CompletedTask;
+}
+public static async Task ParseInlineXbrlContent(
+string htmlContent,
+bool isAnnualReport,
+string companyName,
+string companySymbol,
+DataNonStatic dataNonStatic,
+int companyId)
+{
+    var parsedEntries = new List<FinancialDataEntry>(); // List to accumulate parsed entries
+    try
+    {
+        using (SqlConnection connection = new SqlConnection(Nasdaq100FinancialScraper.Program.connectionString))
+        {
+            await connection.OpenAsync();
+            XDocument xDoc = XDocument.Parse(htmlContent);
+            XNamespace ix = "http://www.xbrl.org/inlineXBRL/2013-02-12";
+            XNamespace xbrli = "http://www.xbrl.org/2003/instance";
+
+            var contexts = new Dictionary<string, XElement>();
+
+            foreach (var contextNode in xDoc.Descendants(xbrli + "context")) // Extract contexts
             {
+                var id = contextNode.Attribute("id")?.Value;
+                if (!string.IsNullOrEmpty(id))
+                {
+                    contexts[id] = contextNode; // Safe assignment
+                }
             }
 
-            await Task.CompletedTask;
-        }
+            DateTime? mostRecentEndDate = contexts.Values // Find the most recent end date from all contexts
+                .Select(ctx => DateTime.TryParse(
+                    ctx.Descendants(xbrli + "endDate").FirstOrDefault()?.Value,
+                    out DateTime date) ? date : (DateTime?)null)
+                .Where(date => date.HasValue)
+                .Max();
 
-        public static async Task ParseTraditionalXbrlContent(string xbrlContent, bool isAnnualReport, string companyName, string companySymbol)
-        {
-            try
+            if (!mostRecentEndDate.HasValue)
             {
-                string cleanedContent = CleanXbrlContent(xbrlContent);
-                XDocument xDocument = TryParseXDocument(cleanedContent);
-                if (xDocument == null)
+                Console.WriteLine("[DEBUG] No valid end dates found in contexts.");
+                return;
+            }
+
+            var elements = xDoc.Descendants()
+                .Where(n => n.Name.Namespace != xbrli && n.Name.Namespace != ix)
+                .Select(n => new
                 {
-                    Console.WriteLine("[ERROR] Failed to parse XBRL document.");
+                    RawName = n.Name.LocalName,
+                    NormalisedName = string.IsNullOrEmpty(n.Name.LocalName)
+                        ? null
+                        : StockScraperV3.URL.NormaliseElementName(n.Name.LocalName),
+                    ContextRef = n.Attribute("contextRef")?.Value,
+                    Value = n.Value.Trim(),
+                    Decimals = n.Attribute("decimals")?.Value ?? "0"
+                })
+                .Where(e => !string.IsNullOrEmpty(e.Value)
+                            && !string.IsNullOrEmpty(e.ContextRef)
+                            && contexts.ContainsKey(e.ContextRef))
+                .ToList();
+
+            if (elements.Count != 0)
+            {
+                var mainContext = contexts.Values
+                    .FirstOrDefault(ctx => DateTime.TryParse(
+                        ctx.Descendants(xbrli + "endDate").FirstOrDefault()?.Value,
+                        out DateTime date) && date == mostRecentEndDate.Value);
+
+                if (mainContext == null)
+                {
+                    Console.WriteLine("[DEBUG] Main context not found.");
                     return;
                 }
 
-                var elementsOfInterest = FinancialElementLists.ElementsOfInterest;
-                var contexts = xDocument.Root?.Descendants()
-                                            .Where(e => e.Name.LocalName == "context")
-                                            .ToDictionary(e => e.Attribute("id")?.Value!, e => e);
-                var elements = xDocument.Root?.Descendants()
-                    .Where(e => elementsOfInterest.Contains(e.Name.LocalName))
-                    .Select(e => new DataElements.FinancialElementLists.FinancialElement
-                    {
-                        Name = e.Name.LocalName,
-                        ContextRef = e.Attribute("contextRef")?.Value,
-                        Value = e.Value?.Trim()
-                    })
-                    .Where(e => e.ContextRef != null && !string.IsNullOrEmpty(e.Value))
-                    .ToList();
+                DateTime? contextStartDate = DateTime.TryParse(
+                    mainContext.Descendants(xbrli + "startDate").FirstOrDefault()?.Value,
+                    out DateTime startDateValue) ? startDateValue : (DateTime?)null;
 
-                if (elements != null && elements.Any() && contexts != null && contexts.Any())
+                DateTime? contextEndDate = DateTime.TryParse(
+                    mainContext.Descendants(xbrli + "endDate").FirstOrDefault()?.Value,
+                    out DateTime endDateValue) ? endDateValue : (DateTime?)null;
+
+                if (!contextEndDate.HasValue)
                 {
-                    foreach (var context in contexts.Values)
+                    Console.WriteLine("[DEBUG] Invalid context end date.");
+                    return;
+                }
+
+                DateTime entryEndDate = contextEndDate.Value;
+                DateTime entryStartDate = isAnnualReport
+                    ? AdjustStartDate(entryEndDate, contextStartDate, null, isAnnualReport)
+                    : entryEndDate.AddMonths(-3);
+
+                int quarter = isAnnualReport
+                    ? 0
+                    : Data.Data.CalculateQuarterByFiscalDayMonth(companyId, entryEndDate, connection, null, 15);
+
+                //var parsedData = new FinancialDataEntry
+                //{
+                //    CompanyID = companyId,
+                //    StartDate = entryStartDate,
+                //    EndDate = entryEndDate,
+                //    Quarter = quarter,
+                //    IsHtmlParsed = false,
+                //    IsXbrlParsed = true,
+                //    FinancialValues = new Dictionary<string, object>(),
+                //    FinancialValueTypes = new Dictionary<string, Type>()
+                //};
+                // Calculate Fiscal Year based on EndDate and Quarter
+                int fiscalYear = CompanyFinancialData.GetFiscalYear(entryEndDate, quarter);
+
+                // Get Standard Period Dates based on Fiscal Year and Quarter
+                (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(fiscalYear, quarter);
+
+                // Initialize the FinancialDataEntry with Standard Dates
+                var parsedData = new FinancialDataEntry
+                {
+                    CompanyID = companyId,
+                    StartDate = entryStartDate,               // Parsed StartDate
+                    EndDate = entryEndDate,                   // Parsed EndDate
+                    Quarter = quarter,
+                    IsHtmlParsed = false,
+                    IsXbrlParsed = true,
+                    FinancialValues = new Dictionary<string, object>(),
+                    FinancialValueTypes = new Dictionary<string, Type>(),
+                    StandardStartDate = standardStartDate,    // Set StandardStartDate
+                    StandardEndDate = standardEndDate         // Set StandardEndDate
+                };
+
+
+                foreach (var element in elements)
+                {
+                    if (string.IsNullOrEmpty(element.ContextRef) || !contexts.TryGetValue(element.ContextRef, out XElement context))
                     {
-                        DateTime? contextStartDate = DateTime.TryParse(context.Descendants().FirstOrDefault(e => e.Name.LocalName == "startDate")?.Value, out DateTime startDateValue) ? startDateValue : (DateTime?)null;
-                        DateTime? contextEndDate = DateTime.TryParse(context.Descendants().FirstOrDefault(e => e.Name.LocalName == "endDate")?.Value, out DateTime endDateValue) ? endDateValue : (DateTime?)null;
-                        DateTime? contextInstantDate = DateTime.TryParse(context.Descendants().FirstOrDefault(e => e.Name.LocalName == "instant")?.Value, out DateTime instantDateValue) ? instantDateValue : (DateTime?)null;
+                        continue;
+                    }
 
-                        if (contextInstantDate.HasValue && (!contextStartDate.HasValue || !contextEndDate.HasValue))
-                        {
-                            Nasdaq100FinancialScraper.Program.globalInstantDate = contextInstantDate;
-                            Nasdaq100FinancialScraper.Program.globalEndDate = Nasdaq100FinancialScraper.Program.globalInstantDate;
+                    // Parse and assign financial value
+                    if (decimal.TryParse(element.Value, out decimal parsedValue))
+                    {
+                        int decimalPlaces = int.TryParse(element.Decimals, out int dec) ? dec : 0;
+                        parsedValue /= (decimal)Math.Pow(10, decimalPlaces); // Adjust for decimals
 
-                            if (isAnnualReport)
-                            {
-                                Nasdaq100FinancialScraper.Program.globalStartDate = Nasdaq100FinancialScraper.Program.globalEndDate?.AddYears(-1);
-                            }
-                            else
-                            {
-                                Nasdaq100FinancialScraper.Program.globalStartDate = Nasdaq100FinancialScraper.Program.globalEndDate?.AddMonths(-3);
-                            }
-                        }
-                        else if (contextStartDate.HasValue && contextEndDate.HasValue)
+                        if (!string.IsNullOrEmpty(element.NormalisedName))
                         {
-                            Nasdaq100FinancialScraper.Program.globalStartDate = contextStartDate;
-                            Nasdaq100FinancialScraper.Program.globalEndDate = contextEndDate;
-                        }
-                        else
-                        {
-                        }
-
-                        foreach (var element in elements.Where(e => e.ContextRef == context.Attribute("id")?.Value))
-                        {
-                            var dbColumn = element.Name;
-                            Data.Data.SaveToDatabase(dbColumn, element.Value!, context, elementsOfInterest.ToArray(), elements, isAnnualReport, companyName, companySymbol, isXbrlParsed: true, startDate: Nasdaq100FinancialScraper.Program.globalStartDate,
-        endDate: Nasdaq100FinancialScraper.Program.globalEndDate);
+                            parsedData.FinancialValues[element.NormalisedName] = parsedValue;
+                            parsedData.FinancialValueTypes[element.NormalisedName] = typeof(decimal);
                         }
                     }
                 }
 
-                if (!Nasdaq100FinancialScraper.Program.globalEndDate.HasValue)
-                {
-                    Nasdaq100FinancialScraper.Program.globalEndDate = DateTime.Now;  // Fallback to current date if end date is missing
-                }
-                else
-                {
-                }
-
+                // Add the fully populated FinancialDataEntry to parsedEntries and dataNonStatic
+                parsedEntries.Add(parsedData);
+                await dataNonStatic.AddParsedDataAsync(companyId, parsedData); // Updated to use the asynchronous method
             }
-            catch (Exception ex)
-            {
-            }
-
-            await Task.CompletedTask;
-        }
-
-        public static async Task DownloadAndParseXbrlData(string filingUrl, bool isAnnualReport, string companyName, string companySymbol, Func<string, bool, string, string, Task> parseTraditionalXbrlContent, Func<string, bool, string, string, Task> parseInlineXbrlContent)
-        {
-            Task<string> contentTask = null;
-            if (filingUrl.EndsWith("_htm.xml") || filingUrl.EndsWith("_xbrl.htm") || filingUrl.EndsWith(".xml"))
-            {
-                contentTask = GetXbrlFromHtml(filingUrl); // Get XBRL from HTML or XML
-            }
-            else if (filingUrl.EndsWith(".htm"))
-            {
-                contentTask = GetHtmlContent(filingUrl); // Get HTML content for inline XBRL
-            }
-            else if (filingUrl.EndsWith(".txt"))
-            {
-                contentTask = GetEmbeddedXbrlContent(filingUrl); // Get embedded XBRL content
-            }
-            else
-            {
-                return; // Exit the method as no valid task was set
-            }
-            if (contentTask != null)
-            {
-                var content = await contentTask;
-                if (!string.IsNullOrEmpty(content))
-                {
-                    if (filingUrl.EndsWith(".htm"))
-                    {
-                        await parseInlineXbrlContent(content, isAnnualReport, companyName, companySymbol);
-                    }
-                    else
-                    {
-                        await parseTraditionalXbrlContent(content, isAnnualReport, companyName, companySymbol);
-                    }
-                }
-                else
-                {
-                }
-            }
-            else
-            {
-            }
-        }
-        public static string CleanXbrlContent(string xbrlContent)
-        {
-            xbrlContent = xbrlContent.TrimStart('\uFEFF');
-
-            if (!xbrlContent.Contains("xmlns:xbrli"))
-            {
-                xbrlContent = xbrlContent.Replace("<xbrli:xbrl", "<xbrli:xbrl xmlns:xbrli=\"http://www.xbrl.org/2003/instance\"");
-            }
-            int xmlDeclarationIndex = xbrlContent.IndexOf("<?xml");
-            if (xmlDeclarationIndex > 0)
-            {
-                xbrlContent = xbrlContent.Substring(xmlDeclarationIndex);
-            }
-            xbrlContent = System.Text.RegularExpressions.Regex.Replace(xbrlContent, @"<!--(.+?)-->", match =>
-            {
-                string comment = match.Groups[1].Value;
-                comment = comment.Replace("--", "-");
-                if (comment.EndsWith("-"))
-                {
-                    comment = comment.TrimEnd('-');
-                }
-                return $"<!--{comment}-->";
-            });
-            xbrlContent = System.Text.RegularExpressions.Regex.Replace(xbrlContent, @"<!---+", "<!--");
-            xbrlContent = System.Text.RegularExpressions.Regex.Replace(xbrlContent, @"-+>", "-->");
-            xbrlContent = System.Text.RegularExpressions.Regex.Replace(xbrlContent, @"</([a-zA-Z0-9]+)\s*>", "</$1>");
-            xbrlContent = System.Text.RegularExpressions.Regex.Replace(xbrlContent, @"<([a-zA-Z0-9]+)\s*>", "<$1>");
-            xbrlContent = xbrlContent.Replace("</ ", "</");
-            xbrlContent = xbrlContent.Replace("< /", "</");
-            xbrlContent = xbrlContent.Replace("</xbrli:xbrl", "</xbrli:xbrl>");
-            xbrlContent = xbrlContent.TrimStart();
-            return xbrlContent.Trim();
-        }
-        private static async Task<string> GetXbrlFromHtml(string url) => await httpClient.GetStringAsync(url);
-        public static async Task<string> GetHtmlContent(string url) => await httpClient.GetStringAsync(url);
-        private static async Task<string> GetEmbeddedXbrlContent(string filingUrl)
-        {
-            int maxRetries = 3;
-            int delay = 1000; // Start with a 2-second delay
-
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
-            {
-                try
-                {
-                    // Attempt to fetch the content
-                    string txtContent = await httpClient.GetStringAsync(filingUrl);
-                    return ExtractEmbeddedXbrlFromTxt(txtContent);
-                }
-                catch (HttpRequestException ex) when (attempt < maxRetries)
-                {
-                    await Task.Delay(delay);
-                    delay *= 2; // Exponential backoff
-                }
-            }
-
-            throw new HttpRequestException($"Failed to retrieve content from {filingUrl} after {maxRetries} attempts.");
-        }
-
-        private static string ExtractEmbeddedXbrlFromTxt(string txtContent)
-        {
-            var possibleXbrlTags = new[] { "<xbrli:xbrl", "<XBRL>", "<xbrl>", "<XBRLDocument>", "<xbrli:xbrl>" };
-            foreach (var startTag in possibleXbrlTags)
-            {
-                var endTag = startTag.Replace("<", "</");
-                int startIndex = txtContent.IndexOf(startTag, StringComparison.OrdinalIgnoreCase);
-                int endIndex = txtContent.IndexOf(endTag, startIndex + startTag.Length, StringComparison.OrdinalIgnoreCase);
-                if (startIndex != -1 && endIndex != -1)
-                {
-                    return txtContent.Substring(startIndex, endIndex - startIndex + endTag.Length);
-                }
-            }
-            return txtContent;
         }
     }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Exception in ParseInlineXbrlContent: {ex.Message}");
+    }
+    await Task.CompletedTask;
 }
