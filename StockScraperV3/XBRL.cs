@@ -53,49 +53,72 @@ namespace XBRL
                 }
             }
         }
-        public static async Task ReparseXbrlReports(int companyId, int periodId, int year, int quarter, string companyName, string companySymbol)
+
+        public static async Task ReparseXbrlReports(int companyId, int periodId, string companyName, string companySymbol, List<SqlCommand> batchedCommands)
         {
-            var filings = await StockScraperV3.URL.GetFilingUrlsForSpecificPeriod(companySymbol, year, quarter, "10-Q");
-            filings.AddRange(await StockScraperV3.URL.GetFilingUrlsForSpecificPeriod(companySymbol, year, quarter, "10-K"));
+            // Fetch all filings for the last 10 years, including both 10-K and 10-Q filings
+            var filings = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companySymbol, "10-Q");
+            filings.AddRange(await StockScraperV3.URL.GetFilingUrlsForLast10Years(companySymbol, "10-K"));
+
+            // If no filings are found, return early
             if (!filings.Any())
             {
                 return;
             }
+
+            // Loop through the filings and process them asynchronously
             var tasks = filings.Select(async filing =>
             {
+                // Attempt to get the XBRL URL for each filing
                 string xbrlUrl = await GetXbrlUrl(filing.url);
                 if (!string.IsNullOrEmpty(xbrlUrl))
                 {
                     try
                     {
+                        // Reset global dates
                         Nasdaq100FinancialScraper.Program.globalStartDate = null;
                         Nasdaq100FinancialScraper.Program.globalEndDate = null;
                         Nasdaq100FinancialScraper.Program.globalInstantDate = null;
-                        await DownloadAndParseXbrlData(xbrlUrl, filing.description.Contains("10-K"), companyName, companySymbol, ParseTraditionalXbrlContent, ParseInlineXbrlContent);
+
+                        // Download and parse XBRL data for each filing
+                        bool isAnnualReport = filing.description.Contains("10-K");// HERE
+                        await DownloadAndParseXbrlData(xbrlUrl, isAnnualReport, companyName, companySymbol,
+                            ParseTraditionalXbrlContent,
+                            ParseInlineXbrlContent);
                     }
                     catch (Exception ex)
                     {
+                        // Log error if something goes wrong during the reparsing process
+                        Console.WriteLine($"[ERROR] Exception during XBRL reparsing for {companyName} ({companySymbol}): {ex.Message}");
                     }
                 }
                 else
                 {
+                    // Log if no XBRL URL is found for a filing
+                    Console.WriteLine($"[ERROR] No XBRL URL found for {companyName} ({companySymbol})");
                 }
             }).ToList();
+
+            // Wait for all tasks to complete
             await Task.WhenAll(tasks);
-            await UpdateParsedFullXbrlColumn(companyId, periodId);
+
+            // Update the ParsedFullXBRL column for this company and period using batched commands
+            await UpdateParsedFullXbrlColumn(companyId, periodId, batchedCommands);
         }
-        private static async Task UpdateParsedFullXbrlColumn(int companyId, int periodId)
+        private static async Task UpdateParsedFullXbrlColumn(int companyId, int periodId, List<SqlCommand> batchedCommands)
         {
             string query = @"
-                UPDATE FinancialData
-                SET ParsedFullXBRL = 'Yes'
-                WHERE CompanyID = @CompanyID AND PeriodID = @PeriodID";
+        UPDATE FinancialData
+        SET ParsedFullXBRL = 'Yes'
+        WHERE CompanyID = @CompanyID AND PeriodID = @PeriodID";
+
             var command = new SqlCommand(query);
             command.Parameters.AddWithValue("@CompanyID", companyId);
             command.Parameters.AddWithValue("@PeriodID", periodId);
 
-            Program.batchedCommands.Add(command);
+            batchedCommands.Add(command);  // Add the command to the provided batchedCommands list
         }
+
         public static async Task ParseInlineXbrlContent(string htmlContent, bool isAnnualReport, string companyName, string companySymbol)
         {
             try
@@ -149,44 +172,36 @@ namespace XBRL
                             {
                                 Nasdaq100FinancialScraper.Program.globalStartDate = Nasdaq100FinancialScraper.Program.globalEndDate?.AddMonths(-3);
                             }
-                            //Console.WriteLine($"[INFO] Set globalInstantDate: {Nasdaq100FinancialScraper.Program.globalInstantDate}, globalEndDate: {Nasdaq100FinancialScraper.Program.globalEndDate}");
                         }
                         else if (contextStartDate.HasValue && contextEndDate.HasValue)
                         {
                             Nasdaq100FinancialScraper.Program.globalStartDate = contextStartDate;
                             Nasdaq100FinancialScraper.Program.globalEndDate = contextEndDate;
-                            //Console.WriteLine($"[INFO] Set globalStartDate: {Nasdaq100FinancialScraper.Program.globalStartDate}, globalEndDate: {Nasdaq100FinancialScraper.Program.globalEndDate}");
                         }
-                        else
-                        {
-                            //Console.WriteLine("[ERROR] Missing start, end, or instant dates in XBRL context.");
-                        }
+                        else { }
 
                         var dbColumn = element.Name;
-                        Data.Data.SaveToDatabase(dbColumn, element.Value!, context, elementsOfInterest.ToArray(), elements, isAnnualReport, companyName, companySymbol, isXbrlParsed: true);
+                        Data.Data.SaveToDatabase(dbColumn, element.Value!, context, elementsOfInterest.ToArray(), elements, isAnnualReport, companyName, companySymbol, isHtmlParsed: false, isXbrlParsed: true, startDate: Nasdaq100FinancialScraper.Program.globalStartDate,endDate: Nasdaq100FinancialScraper.Program.globalEndDate);
                         isXbrlParsed = true;
-                        //Console.WriteLine($"[INFO] Saved XBRL data for element {dbColumn}: {element.Value}");
                     }
                 }
 
                 if (!Nasdaq100FinancialScraper.Program.globalEndDate.HasValue)
                 {
                     Nasdaq100FinancialScraper.Program.globalEndDate = DateTime.Now;  // Fallback to current date if end date is missing
-                    //Console.WriteLine($"[WARNING] globalEndDate not set. Defaulting to {Nasdaq100FinancialScraper.Program.globalEndDate}");
                 }
                 else
                 {
-                    //Console.WriteLine($"[INFO] Successfully processed XBRL content with globalEndDate: {Nasdaq100FinancialScraper.Program.globalEndDate}");
+                    
                 }
-
                 if (isXbrlParsed)
                 {
-                    Data.Data.SaveToDatabase(string.Empty, string.Empty, null, elementsOfInterest.ToArray(), null, isAnnualReport, companyName, companySymbol, isXbrlParsed: true);
+                    Data.Data.SaveToDatabase(string.Empty, string.Empty, null, elementsOfInterest.ToArray(), null, isAnnualReport, companyName, companySymbol, isXbrlParsed: true, startDate: Nasdaq100FinancialScraper.Program.globalStartDate,
+        endDate: Nasdaq100FinancialScraper.Program.globalEndDate);
                 }
             }
             catch (Exception ex)
             {
-                //Console.WriteLine($"[ERROR] Exception occurred while parsing XBRL content for {companyName}: {ex.Message}");
             }
 
             await Task.CompletedTask;
@@ -240,24 +255,21 @@ namespace XBRL
                             {
                                 Nasdaq100FinancialScraper.Program.globalStartDate = Nasdaq100FinancialScraper.Program.globalEndDate?.AddMonths(-3);
                             }
-                            //Console.WriteLine($"[INFO] Set globalInstantDate: {Nasdaq100FinancialScraper.Program.globalInstantDate}, globalEndDate: {Nasdaq100FinancialScraper.Program.globalEndDate}");
                         }
                         else if (contextStartDate.HasValue && contextEndDate.HasValue)
                         {
                             Nasdaq100FinancialScraper.Program.globalStartDate = contextStartDate;
                             Nasdaq100FinancialScraper.Program.globalEndDate = contextEndDate;
-                           // Console.WriteLine($"[INFO] Set globalStartDate: {Nasdaq100FinancialScraper.Program.globalStartDate}, globalEndDate: {Nasdaq100FinancialScraper.Program.globalEndDate}");
                         }
                         else
                         {
-                            //Console.WriteLine("[ERROR] Missing start, end, or instant dates in XBRL context.");
                         }
 
                         foreach (var element in elements.Where(e => e.ContextRef == context.Attribute("id")?.Value))
                         {
                             var dbColumn = element.Name;
-                            Data.Data.SaveToDatabase(dbColumn, element.Value!, context, elementsOfInterest.ToArray(), elements, isAnnualReport, companyName, companySymbol, isXbrlParsed: true);
-                            //Console.WriteLine($"[INFO] Saved XBRL data for element {dbColumn}: {element.Value}");
+                            Data.Data.SaveToDatabase(dbColumn, element.Value!, context, elementsOfInterest.ToArray(), elements, isAnnualReport, companyName, companySymbol, isXbrlParsed: true, startDate: Nasdaq100FinancialScraper.Program.globalStartDate,
+        endDate: Nasdaq100FinancialScraper.Program.globalEndDate);
                         }
                     }
                 }
@@ -265,17 +277,14 @@ namespace XBRL
                 if (!Nasdaq100FinancialScraper.Program.globalEndDate.HasValue)
                 {
                     Nasdaq100FinancialScraper.Program.globalEndDate = DateTime.Now;  // Fallback to current date if end date is missing
-                    //Console.WriteLine($"[WARNING] globalEndDate not set. Defaulting to {Nasdaq100FinancialScraper.Program.globalEndDate}");
                 }
                 else
                 {
-                    //Console.WriteLine($"[INFO] Successfully processed XBRL content with globalEndDate: {Nasdaq100FinancialScraper.Program.globalEndDate}");
                 }
 
             }
             catch (Exception ex)
             {
-               // Console.WriteLine($"[ERROR] Error while processing XBRL content: {ex.Message}");
             }
 
             await Task.CompletedTask;
@@ -360,7 +369,7 @@ namespace XBRL
         private static async Task<string> GetEmbeddedXbrlContent(string filingUrl)
         {
             int maxRetries = 3;
-            int delay = 2000; // Start with a 2-second delay
+            int delay = 1000; // Start with a 2-second delay
 
             for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
