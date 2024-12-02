@@ -32,7 +32,7 @@ namespace Data
         }
         public void AddOrUpdateEntry(FinancialDataEntry entry)
         {     // Define a leeway period (e.g., +/- 5 days)
-            TimeSpan leeway = TimeSpan.FromDays(5);
+            TimeSpan leeway = TimeSpan.FromDays(15);
             // Try to find an existing key within the leeway period
             var existingEntryKey = FinancialEntries.Keys.FirstOrDefault(key =>
             {

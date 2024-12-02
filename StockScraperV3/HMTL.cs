@@ -124,9 +124,9 @@ namespace HTML
                             try
                             {
                                 ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", financialStatementsButton);
-                                await Task.Delay(500);
+                                await Task.Delay(300);
                                 ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", financialStatementsButton);
-                                await Task.Delay(1000);
+                                await Task.Delay(400);
                                 var accordionElements = driver.FindElements(By.XPath("//ul[@style='display: block;']//li[contains(@class, 'accordion')]//a[contains(@class, 'xbrlviewer')]"));
                                 if (accordionElements.Count == 0)
                                 {
@@ -138,9 +138,9 @@ namespace HTML
                                     { // Extract the statement name from the button text
                                         string statementName = accordionElement.Text.Trim();
                                         ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", accordionElement);
-                                        await Task.Delay(800);
+                                        await Task.Delay(400);
                                         ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", accordionElement);
-                                        await Task.Delay(1000);
+                                        await Task.Delay(400);
                                         var reportElement = wait.Until(ExpectedConditions.ElementIsVisible(By.XPath("//table[contains(@class, 'report')]")));
                                         string reportHtml = reportElement.GetAttribute("outerHTML");
                                         var parsedHtmlElements = await ParseHtmlForElementsOfInterest(reportHtml, isAnnualReport, companyName, companySymbol, companyId, dataNonStatic, statementName);  
