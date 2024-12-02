@@ -342,6 +342,9 @@ namespace StockScraperV3
             var driverPool = new ChromeDriverPool(5); // Initialize pool with 5 drivers
             var semaphore = new SemaphoreSlim(5); // Limit concurrency to match the driver pool size
 
+            // Initialize a shared DataNonStatic instance
+            var dataNonStatic = new DataNonStatic();
+
             foreach (var company in nasdaq100Companies)
             {
                 var localCompany = company;
@@ -367,7 +370,6 @@ namespace StockScraperV3
                     continue;
                 }
 
-                var dataNonStatic = new DataNonStatic(); // Shared DataNonStatic instance
                 var chromeDriverTasks = new List<Task>();
 
                 foreach (var filing in filings)
@@ -419,7 +421,7 @@ namespace StockScraperV3
                     {
                         try
                         {
-                            Data.Data.CalculateAndSaveQ4InDatabase(connection, transaction, localCompany.companyId);
+                            await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic);
                             transaction.Commit();
                             Console.WriteLine($"Transaction committed for {localCompany.companyName} ({localCompany.symbol}).");
                         }
@@ -445,6 +447,7 @@ namespace StockScraperV3
             driverPool.Dispose(); // Dispose of the driver pool after processing
             semaphore.Dispose(); // Dispose of the semaphore
         }
+
         public static async Task<int> GetCompanyIdBySymbol(string companySymbol)
         {
             int companyId = 0;

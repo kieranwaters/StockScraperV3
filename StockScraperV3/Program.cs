@@ -324,6 +324,9 @@ namespace Nasdaq100FinancialScraper
                 var companies = await StockScraperV3.URL.GetNasdaq100CompaniesFromDatabase();
                 var tasks = new List<Task>();
 
+                // Initialize a shared DataNonStatic instance
+                var dataNonStatic = new DataNonStatic();
+
                 foreach (var company in companies)
                 {
                     await semaphore.WaitAsync(); // Wait until a slot is available
@@ -341,12 +344,13 @@ namespace Nasdaq100FinancialScraper
                                 try
                                 {
                                     // Use company.companyId to call CalculateAndSaveQ4InDatabase for the current company
-                                    Data.Data.CalculateAndSaveQ4InDatabase(connection, transaction, company.companyId);
+                                    Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, company.companyId, dataNonStatic);
 
                                     transaction.Commit(); // Commit the transaction if successful
                                 }
                                 catch (Exception ex)
                                 {
+                                    Console.WriteLine($"[ERROR] Transaction failed for CompanyID: {company.companyId}: {ex.Message}");
                                     transaction.Rollback(); // Rollback the transaction on failure
                                 }
                             }

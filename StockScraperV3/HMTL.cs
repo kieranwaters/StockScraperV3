@@ -25,6 +25,32 @@ namespace HTML
         private static List<ChromeDriver> driverPool = new List<ChromeDriver>();
         private static SemaphoreSlim driverSemaphore = new SemaphoreSlim(5, 5); // Allow up to 5 concurrent drivers
 
+        // Define the normalization mapping
+        private static readonly Dictionary<string, string> normalizedStatementTypeMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "operations", "Statement_of_Operations" },
+            { "statements of operations", "Statement_of_Operations" },
+            { "statement of operations", "Statement_of_Operations" },
+            { "cashflow", "Cashflow_Statement" },
+            { "cash flow statement", "Cashflow_Statement" },
+            { "income statement", "Income_Statement" },
+            { "balance sheet", "Balance_Sheet" },
+            // Add other mappings as necessary
+        };
+        // Add this method within the HTML class.
+        private static string ConstructHtmlElementName(int quarter, int year, string statementType, string elementLabel)
+        {
+            // Sanitize the statement type and element label to remove spaces and special characters
+            string sanitizedStatementType = Regex.Replace(statementType, @"[\s:()]", "");
+            string sanitizedElementLabel = Regex.Replace(elementLabel, @"[\s:()]", "");
+
+            // Ensure that the element label does not contain colons or other unwanted characters
+            sanitizedElementLabel = sanitizedElementLabel.Replace(":", "");
+
+            return $"HTML_Q{quarter}Report{year}_{sanitizedStatementType}_{sanitizedElementLabel}";
+        }
+
+
         public static async Task InitializeDriverPool()
         {
             for (int i = 0; i < 5; i++)
@@ -98,16 +124,17 @@ namespace HTML
         /// Main method to process interactive data from the given URL.
         /// </summary>
         public static async Task ProcessInteractiveData(
-    ChromeDriver driver, // Added ChromeDriver as the first parameter
-    string interactiveDataUrl,
-    string companyName,
-    string companySymbol,
-    bool isAnnualReport,
-    string filingUrl,
-    int companyId,
-    DataNonStatic dataNonStatic)
+            ChromeDriver driver, // Added ChromeDriver as the first parameter
+            string interactiveDataUrl,
+            string companyName,
+            string companySymbol,
+            bool isAnnualReport,
+            string filingUrl,
+            int companyId,
+            DataNonStatic dataNonStatic)
         {
             var parsedEntries = new List<FinancialDataEntry>(); // List to accumulate parsed entries
+            await driverSemaphore.WaitAsync();
             try
             {
                 var dataTimer = Stopwatch.StartNew();
@@ -148,6 +175,9 @@ namespace HTML
                                 {
                                     try
                                     {
+                                        // Extract the statement name from the button text
+                                        string statementName = accordionElement.Text.Trim();
+
                                         ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", accordionElement);
                                         await Task.Delay(800);
                                         ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", accordionElement);
@@ -162,7 +192,8 @@ namespace HTML
                                             companyName,
                                             companySymbol,
                                             companyId,
-                                            dataNonStatic);
+                                            dataNonStatic,
+                                            statementName);  // Pass the statement name to the parsing method
 
                                         if (parsedHtmlElements.Count == 0)
                                         {
@@ -203,18 +234,14 @@ namespace HTML
                 driverSemaphore.Release(); // Release the driver slot
             }
         }
-
-
-        /// <summary>
-        /// Parses the HTML content and extracts financial data entries.
-        /// </summary>
         public static async Task<List<string>> ParseHtmlForElementsOfInterest(
      string htmlContent,
      bool isAnnualReport,
      string companyName,
      string companySymbol,
      int companyId,
-     DataNonStatic dataNonStatic)
+     DataNonStatic dataNonStatic,
+     string statementName)
         {
             var elements = new List<string>(); // This will store parsed elements
             try
@@ -222,6 +249,7 @@ namespace HTML
                 var htmlDocument = new HtmlDocument();
                 htmlDocument.LoadHtml(htmlContent);
                 var tables = htmlDocument.DocumentNode.SelectNodes("//table[contains(@class, 'report')]");
+
                 if (tables == null || tables.Count == 0)
                 {
                     Console.WriteLine($"[ERROR] No tables with class 'report' found for {companyName} ({companySymbol}).");
@@ -244,38 +272,52 @@ namespace HTML
                         continue;
                     }
 
-                    // Adjust fiscal year end date to the nearest quarter end date
-                    DateTime adjustedFiscalYearEndDate = isAnnualReport
-                        ? AdjustToNearestQuarterEndDate(fiscalYearEndDate.Value)
-                        : fiscalYearEndDate.Value;
+                    Console.WriteLine($"[DEBUG] Extracted fiscal year end date: {fiscalYearEndDate.Value.ToShortDateString()} for {companyName} ({companySymbol})");
 
-                    // Calculate fiscal year start date
-                    DateTime fiscalYearStartDate = isAnnualReport
-                        ? adjustedFiscalYearEndDate.AddDays(1).AddYears(-1)
-                        : adjustedFiscalYearEndDate.AddMonths(-3);
+                    // Adjust fiscal year end date based on report type
+                    DateTime adjustedFiscalYearEndDate = isAnnualReport
+                        ? fiscalYearEndDate.Value // Do not adjust for annual reports
+                        : Data.Data.AdjustToNearestQuarterEndDate(fiscalYearEndDate.Value); // Adjust for quarterly reports
+
+                    Console.WriteLine($"[DEBUG] Adjusted fiscal year end date: {adjustedFiscalYearEndDate.ToShortDateString()} for {companyName} ({companySymbol})");
+
+                    // Retrieve the CompanyFinancialData from the cache
+                    var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
+
+                    if (companyData == null)
+                    {
+                        Console.WriteLine($"[ERROR] Failed to load CompanyData for CompanyID: {companyId}. Skipping parsing.");
+                        continue;
+                    }
+
+                    // Determine fiscal year based on adjustedFiscalYearEndDate
+                    int fiscalYear = Data.Data.GetFiscalYear(
+                        adjustedFiscalYearEndDate,
+                        isAnnualReport ? 0 : -1, // Assuming -1 means to calculate quarter from date
+                        adjustedFiscalYearEndDate);
+
+                    Console.WriteLine($"[DEBUG] Determined fiscal year: {fiscalYear} for {companyName} ({companySymbol})");
 
                     // Determine the quarter
-                    int quarter = isAnnualReport ? 0 : await DetermineQuarter(companyId, adjustedFiscalYearEndDate);
+                    int quarter = isAnnualReport ? 0 : Data.Data.CalculateQuarterByFiscalDayMonth(
+                        adjustedFiscalYearEndDate, adjustedFiscalYearEndDate);
 
-                    // Calculate Fiscal Year based on EndDate and Quarter
-                    // Pass fiscalYearEndDate if quarter == 0
-                    int fiscalYear = Data.CompanyFinancialData.GetFiscalYear(
-                        adjustedFiscalYearEndDate,
-                        quarter,
-                        quarter == 0 ? (DateTime?)adjustedFiscalYearEndDate : null);
+                    Console.WriteLine($"[DEBUG] Determined quarter: {quarter} for {companyName} ({companySymbol})");
 
-                    // Get Standard Period Dates based on Fiscal Year and Quarter
+                    // Get standardized period dates based on fiscal year and quarter
                     (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(
                         fiscalYear,
                         quarter,
-                        quarter == 0 ? (DateTime?)adjustedFiscalYearEndDate : null);
+                        adjustedFiscalYearEndDate);
 
-                    // Initialize the FinancialDataEntry with Standard Dates
+                    Console.WriteLine($"[DEBUG] Standard period dates: Start - {standardStartDate.ToShortDateString()}, End - {standardEndDate.ToShortDateString()} for {companyName} ({companySymbol})");
+
+                    // Initialize the FinancialDataEntry with standardized dates
                     var parsedData = new FinancialDataEntry
                     {
                         CompanyID = companyId,
-                        StartDate = fiscalYearStartDate,
-                        EndDate = adjustedFiscalYearEndDate,
+                        StartDate = standardStartDate,
+                        EndDate = standardEndDate,
                         Quarter = quarter,
                         IsHtmlParsed = true,
                         IsXbrlParsed = false,
@@ -286,8 +328,11 @@ namespace HTML
                         FiscalYearEndDate = adjustedFiscalYearEndDate
                     };
 
+                   
+
                     // Extract scaling factors
                     var (sharesMultiplier, dollarMultiplier) = ExtractScalingFactor(htmlDocument);
+                    Console.WriteLine($"[DEBUG] Extracted scaling factors: SharesMultiplier = {sharesMultiplier}, DollarMultiplier = {dollarMultiplier}");
 
                     foreach (var row in rows) // Process the data rows
                     {
@@ -312,31 +357,27 @@ namespace HTML
                                 continue;
                             }
 
-                            var elementsOfInterest = FinancialElementLists.HTMLElementsOfInterest;
-                            var matchedElement = elementsOfInterest.FirstOrDefault(kvp => kvp.Key.Contains(label));
-                            if (matchedElement.Key != null)
-                            {
-                                var (columnName, isShares, isCashFlowStatement, isBalanceSheet) = matchedElement.Value;
-                                var elementNames = elementsOfInterest.Values.Select(v => v.Item1).ToArray();
+                            // Use fiscalYear directly
+                            int year = fiscalYear;
 
-                                // Add the element label to the parsed elements list
-                                elements.Add(label);
+                            // Normalize the statement type
+                            string normalizedStatementType = NormalizeStatementName(statementName);
 
-                                // Assign financial values
-                                if (!string.IsNullOrEmpty(columnName))
-                                {
-                                    parsedData.FinancialValues[columnName] = value;
-                                    parsedData.FinancialValueTypes[columnName] = typeof(double);
-                                }
-                            }
+                            // Construct the element name
+                            string elementName = ConstructHtmlElementName(quarter, fiscalYear, normalizedStatementType, label);
+
+                            // Add the element to the parsed data
+                            parsedData.FinancialValues[elementName] = value;
+                            parsedData.FinancialValueTypes[elementName] = typeof(double);
+
+                            // Add the element label to the parsed elements list
+                            elements.Add(label);
                         }
                     }
 
                     // Add the fully populated FinancialDataEntry to dataNonStatic
                     await dataNonStatic.AddParsedDataAsync(companyId, parsedData);
-
-                    // Break after processing the first successful report
-                    break;
+                    Console.WriteLine($"[INFO] Added FinancialDataEntry for CompanyID: {companyId}, FiscalYear: {fiscalYear}, Quarter: {quarter}");
                 }
             }
             catch (Exception ex)
@@ -347,25 +388,159 @@ namespace HTML
             return elements;
         }
 
-
-        /// <summary>
-        /// Determines the quarter based on the company's fiscal day and month.
-        /// </summary>
         private static async Task<int> DetermineQuarter(int companyId, DateTime reportDate)
         {
             using (SqlConnection connection = new SqlConnection(Nasdaq100FinancialScraper.Program.connectionString))
             {
                 await connection.OpenAsync();
-                return Data.Data.CalculateQuarterByFiscalDayMonth(companyId, reportDate, connection, null, leewayDays: 15);
+
+                // Fetch fiscalYearEndDate for the company from the database
+                DateTime fiscalYearEndDate = Data.Data.GetFiscalYearEndForSpecificYearWithFallback(companyId, reportDate.Year, connection, null);
+
+                // Call CalculateQuarterByFiscalDayMonth with the fetched fiscalYearEndDate
+                return Data.Data.CalculateQuarterByFiscalDayMonth(reportDate, fiscalYearEndDate, leewayDays: 15);
             }
         }
+        private static string GetStatementType(string elementName)
+        {
+            if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
+            {
+                // For HTML elements, extract the statement type
+                var parts = elementName.Split('_');
+                if (parts.Length >= 3)
+                {
+                    // Normalize the extracted statement name
+                    string rawStatementType = parts[2].Trim();
+                    string normalizedName = NormalizeStatementName(rawStatementType);
 
-        /// <summary>
-        /// Extracts the fiscal year end date from the table headers.
-        /// </summary>
+                    if (normalizedStatementTypeMapping.TryGetValue(normalizedName, out string standardizedName))
+                    {
+                        return standardizedName;
+                    }
+                    else
+                    {
+                        return "Other";
+                    }
+                }
+            }
+            else
+            {
+                // For XBRL elements, use keywords to identify the statement type
+                string upperElementName = elementName.ToUpperInvariant();
+
+                if (upperElementName.Contains("CASHFLOW"))
+                {
+                    return "Cashflow_Statement";
+                }
+                else if (upperElementName.Contains("BALANCE"))
+                {
+                    return "Balance_Sheet";
+                }
+                else if (upperElementName.Contains("INCOME"))
+                {
+                    return "Income_Statement";
+                }
+                else if (upperElementName.Contains("OPERATIONS"))
+                {
+                    return "Statement_of_Operations";
+                }
+                else
+                {
+                    // Normalize for other statements
+                    string normalizedName = NormalizeStatementName(upperElementName);
+
+                    if (normalizedStatementTypeMapping.TryGetValue(normalizedName, out string standardizedName))
+                    {
+                        return standardizedName;
+                    }
+                    else
+                    {
+                        return "Other";
+                    }
+                }
+            }
+            return "Other";
+        }
+        private static string NormalizeStatementName(string rawName)
+        {
+            // Define common variations or unnecessary words to be normalized
+            string[] wordsToRemove = new[]
+            {
+                "condensed", "(unaudited)", "consolidated", "interim",
+                "statements of", "statement of", "statements", "statement", "the", "and"
+            };
+
+            // Remove parentheses and extra spaces
+            string normalized = Regex.Replace(rawName, @"\s*\([^)]*\)", "").Trim(); // Remove text within parentheses
+            normalized = Regex.Replace(normalized, @"\s+", " "); // Replace multiple spaces with a single space
+
+            // Remove unnecessary words and phrases
+            foreach (var word in wordsToRemove)
+            {
+                normalized = Regex.Replace(normalized, @"\b" + Regex.Escape(word) + @"\b", "", RegexOptions.IgnoreCase).Trim();
+            }
+
+            return normalized.ToLowerInvariant(); // Use lower case for consistent matching
+        }
+        private static string AdjustElementNameForQ4(string elementName, string standardizedStatementType = null)
+        {
+            if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
+            {
+                // Split the element name
+                var parts = elementName.Split('_');
+                if (parts.Length >= 4)
+                {
+                    // parts[0]: "HTML"
+                    // parts[1]: "QxReport"
+                    // parts[2]: statement type
+                    // parts[3..]: element name
+
+                    // Normalize the statement type
+                    string rawStatementType = parts[2].Trim();
+                    string normalizedName = NormalizeStatementName(rawStatementType);
+
+                    string standardizedStatementTypeFinal;
+                    if (standardizedStatementType != null)
+                    {
+                        standardizedStatementTypeFinal = standardizedStatementType;
+                    }
+                    else if (normalizedStatementTypeMapping.TryGetValue(normalizedName, out string mappedType))
+                    {
+                        standardizedStatementTypeFinal = mappedType;
+                    }
+                    else
+                    {
+                        standardizedStatementTypeFinal = "Other";
+                    }
+
+                    // Replace parts[2] with standardizedStatementTypeFinal (replace spaces with underscores)
+                    parts[2] = standardizedStatementTypeFinal.Replace(" ", "_");
+
+                    // Replace the quarter part with "Q4Report"
+                    parts[1] = "Q4Report";
+
+                    // Reconstruct the adjusted element name
+                    string adjustedElementName = string.Join("_", parts);
+                    return adjustedElementName;
+                }
+                else
+                {
+                    // If element name does not have expected parts, just replace QxReport with Q4Report
+                    string pattern = @"^HTML_Q\dReport_";
+                    string replacement = "HTML_Q4Report_";
+                    string adjustedElementName = Regex.Replace(elementName, pattern, replacement, RegexOptions.IgnoreCase);
+                    return adjustedElementName;
+                }
+            }
+            else
+            {
+                // For XBRL elements, return the element name as is
+                return elementName;
+            }
+        }
         public static DateTime? ExtractDateFromThTags(HtmlNode table)
         {
-            // Select all <th> elements in the table
+            // Select all relevant <th> elements (adjust XPath as needed)
             var thElements = table.SelectNodes(".//th[@class='th']//div");
 
             if (thElements == null || thElements.Count == 0)
@@ -381,7 +556,6 @@ namespace HTML
                 string dateText = th.InnerText.Trim();
                 // Clean up the date text (remove periods and double spaces)
                 dateText = dateText.Replace(".", "").Replace("  ", " ").Trim();
-
                 // Use the regular expression to check if the text is likely a date format
                 if (IsValidDateFormat(dateText))
                 {
@@ -394,37 +568,30 @@ namespace HTML
                     }
                     else
                     {
-                        // Console.WriteLine($"[ERROR] Failed to parse date from text: {dateText}");
+                        Console.WriteLine($"[ERROR] Failed to parse date from text: '{dateText}'");
                     }
                 }
                 else
                 {
-                    // Console.WriteLine($"[INFO] Skipping non-date text: {dateText}");
+                    Console.WriteLine($"[INFO] Skipping non-date text: '{dateText}'");
                 }
             }
 
             if (mostRecentDate.HasValue)
             {
-                // Console.WriteLine($"[DEBUG] Most recent date found: {mostRecentDate.Value}");
                 return mostRecentDate;
             }
 
-            // Console.WriteLine($"[ERROR] No valid date could be extracted from <th> elements.");
+            Console.WriteLine($"[ERROR] No valid date could be extracted from <th> elements.");
             return null;
         }
-
         // Helper method to validate date formats using regex
         public static bool IsValidDateFormat(string text)
         {
             // Regex to match common date formats like "Dec 31, 2022", "July 2023", etc.
             string pattern = @"^(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s\d{1,2},?\s?\d{4}$";
-
             return Regex.IsMatch(text, pattern);
         }
-
-        /// <summary>
-        /// Cleans the raw value and applies the appropriate multiplier.
-        /// </summary>
         public static (string cleanedValue, double multiplier) CleanNumber(string rawValue, double sharesMultiplier, double dollarMultiplier)
         {
             string cleanedValue = rawValue.Replace(",", "").Replace("$", "").Replace("(", "-").Replace(")", "").Trim();
@@ -432,7 +599,6 @@ namespace HTML
             double multiplier = isShares ? sharesMultiplier : dollarMultiplier;
             return (cleanedValue, multiplier);
         }
-
         public static (double sharesMultiplier, double dollarMultiplier) ExtractScalingFactor(HtmlDocument htmlDocument)
         {
             var scalingFactorNode = htmlDocument.DocumentNode.SelectSingleNode(
@@ -457,65 +623,6 @@ namespace HTML
                     dollarMultiplier = 1_000_000;
             }
             return (sharesMultiplier, dollarMultiplier);
-        }
-
-        public static async Task ReparseHtmlReports(int companyId, int periodId, string companyName, string companySymbol, DataNonStatic dataNonStatic)
-        {
-            // Fetch all filings for the last 10 years, including both 10-K and 10-Q filings
-            var filings = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companySymbol, "10-Q");
-            filings.AddRange(await StockScraperV3.URL.GetFilingUrlsForLast10Years(companySymbol, "10-K"));
-
-            // If no filings are found, return early
-            if (!filings.Any())
-            {
-                return;
-            }
-
-            // Loop through the filings and process them asynchronously
-            var tasks = filings.Select(async filing =>
-            {
-                using (var driver = StockScraperV3.URL.StartNewSession())
-                {
-                    // Get the interactive data URL for each filing
-                    string interactiveDataUrl = await StockScraperV3.URL.GetInteractiveDataUrl(filing.url);
-                    if (!string.IsNullOrEmpty(interactiveDataUrl))
-                    {
-                        try
-                        {
-                            // Navigate to the interactive data page
-                            driver.Navigate().GoToUrl(interactiveDataUrl);
-                            var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(30)); // Increased timeout to 30 seconds for more complex pages
-                            wait.Until(driver => ((IJavaScriptExecutor)driver).ExecuteScript("return document.readyState").Equals("complete"));
-
-                            // Get the page source and parse for elements of interest
-                            var pageSource = driver.PageSource;
-                            await ParseHtmlForElementsOfInterest(
-                                pageSource,
-                                false,
-                                companyName,
-                                companySymbol,
-                                companyId,
-                                dataNonStatic);
-                        }
-                        catch (WebDriverTimeoutException ex)
-                        {
-                            Console.WriteLine($"[ERROR] WebDriverTimeoutException during reparsing for {companyName} ({companySymbol}): {ex.Message}");
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ERROR] Exception during reparsing for {companyName} ({companySymbol}): {ex.Message}");
-                        }
-                    }
-                    else
-                    {
-                        // Log if no interactive data URL was found
-                        Console.WriteLine($"[ERROR] No interactive data URL found for {companyName} ({companySymbol}).");
-                    }
-                }
-            }).ToList();
-
-            // Wait for all tasks to complete
-            await Task.WhenAll(tasks);
         }
     }
 }
