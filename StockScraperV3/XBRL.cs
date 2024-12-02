@@ -298,7 +298,7 @@ namespace XBRL
         }
 
         public static async Task<List<string>> ParseInlineXbrlContent(
-    string xbrlContent, // Changed from 'htmlContent' to 'xbrlContent' for consistency
+    string xbrlContent,
     bool isAnnualReport,
     string companyName,
     string companySymbol,
@@ -309,7 +309,7 @@ namespace XBRL
 
             try
             {
-                // Clean and parse the XBRL content
+                // Step 1: Clean and parse the XBRL content
                 string cleanedContent = CleanXbrlContent(xbrlContent);
                 XDocument xDocument = TryParseXDocument(cleanedContent);
                 if (xDocument == null)
@@ -318,11 +318,11 @@ namespace XBRL
                     return elements;
                 }
 
-                // Define namespaces
+                // Step 2: Define namespaces
                 XNamespace xbrli = "http://www.xbrl.org/2003/instance";
                 XNamespace ix = "http://www.xbrl.org/inlineXBRL/2013-02-12";
 
-                // Extract contexts with non-null IDs
+                // Step 3: Extract contexts with non-null IDs
                 var contexts = xDocument.Root?.Descendants()
                     .Where(e => e.Name.LocalName == "context")
                     .Select(e => new { Id = e.Attribute("id")?.Value, Element = e })
@@ -335,7 +335,15 @@ namespace XBRL
                     return elements;
                 }
 
-                // Extract financial elements
+                // Optional: Log all contexts and their endDates for debugging
+                Console.WriteLine("[DEBUG] Listing all contexts and their endDates:");
+                foreach (var ctx in contexts.Values)
+                {
+                    var endDateStr = ctx.Descendants(xbrli + "endDate").FirstOrDefault()?.Value;
+                    Console.WriteLine($"[DEBUG] Context ID: {ctx.Attribute("id")?.Value}, endDate: {endDateStr}");
+                }
+
+                // Step 4: Extract financial elements linked to contexts
                 var elementsList = xDocument.Descendants()
                     .Where(n => n.Name.Namespace != xbrli && n.Name.Namespace != ix)
                     .Select(n => new
@@ -359,30 +367,42 @@ namespace XBRL
                     return elements;
                 }
 
+                // Step 5: Open SQL connection
                 using (SqlConnection connection = new SqlConnection(Nasdaq100FinancialScraper.Program.connectionString))
                 {
                     await connection.OpenAsync();
 
-                    var mainContext = contexts.Values.FirstOrDefault();
-                    if (mainContext == null)
-                    {
-                        Console.WriteLine("[DEBUG] No main context found.");
-                        return elements;
-                    }
-
-                    // Extract dates from the main context
-                    DateTime? contextStartDate = DateTime.TryParse(
-                        mainContext.Descendants(xbrli + "startDate").FirstOrDefault()?.Value,
-                        out DateTime startDateValue) ? startDateValue : (DateTime?)null;
-                    DateTime? contextInstantDate = DateTime.TryParse(
-                        mainContext.Descendants(xbrli + "instant").FirstOrDefault()?.Value,
-                        out DateTime instantDateValue) ? instantDateValue : (DateTime?)null;
-
+                    XElement mainContext = null;
                     DateTime fiscalYearEndDate;
 
                     if (isAnnualReport)
                     {
-                        // **For Annual Reports:** Use the end date directly from the report's context
+                        // **For Annual Reports:** Select the context matching the report's fiscal year end date
+                        // Assuming the annual report has the latest endDate
+                        var annualContexts = contexts.Values
+                            .Where(ctx => DateTime.TryParse(ctx.Descendants(xbrli + "endDate").FirstOrDefault()?.Value, out _))
+                            .ToList();
+
+                        if (!annualContexts.Any())
+                        {
+                            Console.WriteLine($"[ERROR] No contexts with valid endDate found in Annual Report for CompanyID: {companyId}.");
+                            return elements;
+                        }
+
+                        // Select the context with the maximum endDate
+                        mainContext = annualContexts.OrderByDescending(ctx =>
+                        {
+                            DateTime.TryParse(ctx.Descendants(xbrli + "endDate").FirstOrDefault()?.Value, out DateTime date);
+                            return date;
+                        }).FirstOrDefault();
+
+                        if (mainContext == null)
+                        {
+                            Console.WriteLine($"[ERROR] No suitable context found for Annual Report for CompanyID: {companyId}.");
+                            return elements;
+                        }
+
+                        // Extract fiscalYearEndDate from mainContext
                         DateTime? reportFiscalYearEndDate = DateTime.TryParse(
                             mainContext.Descendants(xbrli + "endDate").FirstOrDefault()?.Value,
                             out DateTime fyEndDate) ? fyEndDate : (DateTime?)null;
@@ -394,6 +414,9 @@ namespace XBRL
                         }
 
                         fiscalYearEndDate = reportFiscalYearEndDate.Value;
+
+                        Console.WriteLine($"[DEBUG] Annual Report's Fiscal Year End Date: {fiscalYearEndDate.ToShortDateString()}");
+                        Console.WriteLine($"[DEBUG] Selected mainContext ID: {mainContext.Attribute("id")?.Value} for Annual Report.");
                     }
                     else
                     {
@@ -413,27 +436,50 @@ namespace XBRL
                         }
 
                         fiscalYearEndDate = mostRecentEndDate.Value;
+
+                        // Select the context with the most recent endDate
+                        mainContext = contexts.Values.FirstOrDefault(ctx =>
+                            DateTime.TryParse(
+                                ctx.Descendants(xbrli + "endDate").FirstOrDefault()?.Value,
+                                out DateTime date) && date == fiscalYearEndDate);
+
+                        if (mainContext == null)
+                        {
+                            Console.WriteLine($"[ERROR] No context found with the most recent endDate: {fiscalYearEndDate.ToShortDateString()} for CompanyID: {companyId}.");
+                            return elements;
+                        }
+
+                        Console.WriteLine($"[DEBUG] Quarterly Report's Fiscal Year End Date: {fiscalYearEndDate.ToShortDateString()}");
+                        Console.WriteLine($"[DEBUG] Selected mainContext ID: {mainContext.Attribute("id")?.Value} for Quarterly Report.");
                     }
 
-                    // **Adjust EndDate Based on Report Type**
+                    // Step 6: Adjust Fiscal Year End Date
                     DateTime adjustedFiscalYearEndDate = isAnnualReport
                         ? fiscalYearEndDate // Do not adjust for annual reports
                         : Data.Data.AdjustToNearestQuarterEndDate(fiscalYearEndDate); // Adjust for quarterly reports
 
                     Console.WriteLine($"[DEBUG] Adjusted Fiscal Year End Date: {adjustedFiscalYearEndDate.ToShortDateString()} for CompanyID: {companyId}");
 
-                    // **Adjust StartDate Based on the Adjusted Fiscal Year End Date**
+                    // Step 7: Extract dates from the main context
+                    DateTime? contextStartDate = DateTime.TryParse(
+                        mainContext.Descendants(xbrli + "startDate").FirstOrDefault()?.Value,
+                        out DateTime startDateValue) ? startDateValue : (DateTime?)null;
+                    DateTime? contextInstantDate = DateTime.TryParse(
+                        mainContext.Descendants(xbrli + "instant").FirstOrDefault()?.Value,
+                        out DateTime instantDateValue) ? instantDateValue : (DateTime?)null;
+
+                    // Step 8: Adjust StartDate
                     DateTime entryStartDate = AdjustStartDate(adjustedFiscalYearEndDate, contextStartDate, contextInstantDate, isAnnualReport);
                     Console.WriteLine($"[DEBUG] Adjusted StartDate: {entryStartDate.ToShortDateString()} for CompanyID: {companyId}");
 
-                    // **Determine Quarter**
+                    // Step 9: Determine Quarter
                     int quarter = isAnnualReport
                         ? 0 // 0 indicates an annual report
                         : Data.Data.CalculateQuarterByFiscalDayMonth(adjustedFiscalYearEndDate, fiscalYearEndDate, leewayDays: 15);
 
                     Console.WriteLine($"[DEBUG] Determined Quarter: {quarter} for CompanyID: {companyId}");
 
-                    // **Determine Fiscal Year Using GetFiscalYear Method**
+                    // Step 10: Determine Fiscal Year
                     int fiscalYear = Data.Data.GetFiscalYear(
                         adjustedFiscalYearEndDate,
                         quarter,
@@ -441,7 +487,7 @@ namespace XBRL
 
                     Console.WriteLine($"[DEBUG] Determined Fiscal Year: {fiscalYear} for CompanyID: {companyId}");
 
-                    // **Get Standardized Period Dates Based on Fiscal Year and Quarter**
+                    // Step 11: Get Standardized Period Dates
                     (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(
                         fiscalYear,
                         quarter,
@@ -449,15 +495,15 @@ namespace XBRL
 
                     Console.WriteLine($"[DEBUG] Standard Period Dates: Start - {standardStartDate.ToShortDateString()}, End - {standardEndDate.ToShortDateString()} for CompanyID: {companyId}");
 
-                    // **Initialize the FinancialDataEntry with Standard Dates**
+                    // Step 12: Initialize FinancialDataEntry
                     var parsedData = new FinancialDataEntry
                     {
                         CompanyID = companyId,
                         StartDate = standardStartDate,             // Adjusted StartDate
                         EndDate = standardEndDate,                 // Adjusted EndDate
                         Quarter = quarter,
-                        IsHtmlParsed = true,
-                        IsXbrlParsed = false,
+                        IsHtmlParsed = false,                      // Set to false for XBRL parsing
+                        IsXbrlParsed = true,                       // Set to true for XBRL parsing
                         FinancialValues = new Dictionary<string, object>(),
                         FinancialValueTypes = new Dictionary<string, Type>(),
                         StandardStartDate = standardStartDate,      // Set StandardStartDate
@@ -465,7 +511,8 @@ namespace XBRL
                         FiscalYearEndDate = adjustedFiscalYearEndDate // Set FiscalYearEndDate
                     };
 
-                    // **Assign Financial Values**
+                    // Step 13: Assign Financial Values
+                    Console.WriteLine($"[DEBUG] Assigning financial values to FinancialDataEntry.");
                     foreach (var element in elementsList)
                     {
                         if (decimal.TryParse(element.Value, out decimal decimalValue))
@@ -474,11 +521,16 @@ namespace XBRL
                             {
                                 parsedData.FinancialValues[element.NormalisedName] = decimalValue;
                                 parsedData.FinancialValueTypes[element.NormalisedName] = typeof(decimal);
+                                Console.WriteLine($"[DEBUG] Assigned {element.NormalisedName} = {decimalValue}");
                             }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[WARNING] Unable to parse value '{element.Value}' for element '{element.RawName}'.");
                         }
                     }
 
-                    // **Add the Fully Populated FinancialDataEntry to dataNonStatic**
+                    // Step 14: Add FinancialDataEntry to dataNonStatic
                     await dataNonStatic.AddParsedDataAsync(companyId, parsedData);
                     Console.WriteLine($"[INFO] Added FinancialDataEntry for CompanyID: {companyId}, FiscalYear: {fiscalYear}, Quarter: {quarter}");
                 }
@@ -486,9 +538,14 @@ namespace XBRL
             catch (Exception ex)
             {
                 Console.WriteLine($"[ERROR] Exception in ParseInlineXbrlContent: {ex.Message}");
+                Console.WriteLine($"[ERROR] Stack Trace: {ex.StackTrace}"); // Added for detailed debugging
             }
+
             return elements;
         }
+
+
+
         public static DateTime AdjustEndDate(DateTime endDate, bool isAnnualReport)
         {
             if (isAnnualReport)
