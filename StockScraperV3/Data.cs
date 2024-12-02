@@ -21,7 +21,6 @@ namespace Data
                 .Where(entry => entry.Quarter == 0)
                 .OrderByDescending(entry => entry.EndDate)
                 .ToList();
-
             if (annualReports.Any())
             {
                 return annualReports.First().EndDate;
@@ -32,10 +31,8 @@ namespace Data
             }
         }
         public void AddOrUpdateEntry(FinancialDataEntry entry)
-        {
-            // Define a leeway period (e.g., +/- 5 days)
+        {     // Define a leeway period (e.g., +/- 5 days)
             TimeSpan leeway = TimeSpan.FromDays(5);
-
             // Try to find an existing key within the leeway period
             var existingEntryKey = FinancialEntries.Keys.FirstOrDefault(key =>
             {
@@ -50,15 +47,12 @@ namespace Data
                 }
                 return false;
             });
-
             if (existingEntryKey != null)
-            {
-                // Merge with the existing entry
+            {         // Merge with the existing entry
                 FinancialEntries[existingEntryKey].MergeEntries(entry);
             }
             else
-            {
-                // Add as a new entry
+            {        // Add as a new entry
                 string key = GenerateKey(entry);
                 FinancialEntries[key] = entry;
             }
@@ -69,7 +63,6 @@ namespace Data
             if (fiscalYearEndDate.HasValue)
             {
                 DateTime fiscalYearStart = fiscalYearEndDate.Value.AddYears(-1).AddDays(1);
-
                 if (endDate >= fiscalYearStart && endDate <= fiscalYearEndDate.Value)
                 {
                     return fiscalYearEndDate.Value.Year;
@@ -84,8 +77,7 @@ namespace Data
                 }
             }
             else
-            {
-                // Fallback to existing logic if fiscalYearEndDate is not available
+            {    // Fallback to existing logic if fiscalYearEndDate is not available
                 switch (quarter)
                 {
                     case 1:
@@ -103,21 +95,14 @@ namespace Data
                 }
             }
         }
-
-
         private string GenerateKey(FinancialDataEntry entry)
-        {
-            // Format the dates to a consistent string format (e.g., yyyyMMdd)
+        {    // Format the dates to a consistent string format (e.g., yyyyMMdd)
             string startDateStr = entry.StartDate.ToString("yyyyMMdd");
             string endDateStr = entry.EndDate.ToString("yyyyMMdd");
-
             string key = $"{entry.CompanyID}_{startDateStr}_{endDateStr}";
             Console.WriteLine($"[DEBUG] Generated Key: {key} for CompanyID: {entry.CompanyID}, StartDate: {entry.StartDate.ToShortDateString()}, EndDate: {entry.EndDate.ToShortDateString()}");
             return key;
         }
-
-
-
         public List<FinancialDataEntry> GetCompletedEntries()// Method to retrieve all completed entries
         {
             return FinancialEntries.Values.Where(entry => entry.IsEntryComplete()).ToList();
@@ -178,26 +163,21 @@ namespace Data
         {
             companyData.AddOrUpdateEntry(entry);
         }
-
         var mergedEntries = companyData.FinancialEntries.Values
             .Where(e => e.IsEntryComplete())
             .ToList();
-
         if (!mergedEntries.Any())
         {
             return;
         }
-
         using (SqlConnection connection = new SqlConnection(connectionString))
         {
             await connection.OpenAsync();
             using (SqlTransaction transaction = connection.BeginTransaction())
             {
                 try
-                {
-                    // Define leeway (e.g., 5 days)
-                    TimeSpan leeway = TimeSpan.FromDays(5);
-
+                {    // Define leeway (e.g., 5 days)
+                    TimeSpan leeway = TimeSpan.FromDays(15);
                     await Data.SaveCompleteEntryToDatabase(mergedEntries, connection, transaction);
                     transaction.Commit();
                 }
@@ -223,7 +203,6 @@ namespace Data
         Console.WriteLine($"[ERROR] Failed to save entries to database: {ex.Message}");
     }
 }
-
         private async Task<List<FinancialDataEntry>> LoadFinancialDataFromDatabaseAsync(int companyId)
         {
             var entries = new List<FinancialDataEntry>();
@@ -250,14 +229,11 @@ WHERE CompanyID = @CompanyID";
                             IsXbrlParsed = reader.GetBoolean(5),
                             FinancialValues = Data.ParseFinancialDataJson(reader.GetString(6)),
                             FiscalYearEndDate = null // Initialized as null
-                        };
-
-                        // Set FiscalYearEndDate for annual reports
-                        if (entry.Quarter == 0)
+                        };             
+                        if (entry.Quarter == 0)// Set FiscalYearEndDate for annual reports
                         {
                             entry.FiscalYearEndDate = entry.EndDate;
                         }
-
                         entries.Add(entry);
                     }
                 }
@@ -272,8 +248,7 @@ WHERE CompanyID = @CompanyID";
         public async Task AddParsedDataAsync(int companyId, FinancialDataEntry parsedData)
         {
             var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
-            companyData.AddOrUpdateEntry(parsedData);
-            // Optionally, save to the database immediately or batch the updates
+            companyData.AddOrUpdateEntry(parsedData);// Optionally, save to the database immediately or batch the updates
             await SaveEntriesToDatabaseAsync(companyId, new List<FinancialDataEntry> { parsedData });
         }
         private ConcurrentDictionary<string, FinancialDataEntry> financialDataCache = new ConcurrentDictionary<string, FinancialDataEntry>();
@@ -329,8 +304,7 @@ WHERE CompanyID = @CompanyID";
             {   // For HTML elements, extract the statement type
                 var parts = elementName.Split('_');
                 if (parts.Length >= 3)
-                {
-                    // Normalize the extracted statement name
+                {   // Normalize the extracted statement name
                     string rawStatementType = parts[2].Trim();
                     return NormalizeStatementName(rawStatementType);
                 }
@@ -468,8 +442,7 @@ WHERE CompanyID = @CompanyID";
                         return;
                     }
                 }
-            }
-            // Default to calendar year if no annual report is found
+            }    // Default to calendar year if no annual report is found
             fiscalYearStart = new DateTime(year, 1, 1);
             fiscalYearEnd = new DateTime(year, 12, 31);
             Console.WriteLine($"[WARNING] No annual report found for Fiscal Year {year}. Defaulting to Calendar Year.");
@@ -478,11 +451,9 @@ WHERE CompanyID = @CompanyID";
         {  // Same implementation as GetFinancialValue
             return GetFinancialValue(connection, transaction, companyId, year, quarter, columnName);
         }    
-
         public static (DateTime periodStart, DateTime periodEnd) GetStandardPeriodDatesBasedOnCalendarYear(int fiscalYear, int quarter)
         {
             DateTime periodStart, periodEnd;
-
             switch (quarter)
             {
                 case 1:
@@ -509,27 +480,13 @@ WHERE CompanyID = @CompanyID";
                 default:
                     throw new ArgumentException("Invalid quarter value", nameof(quarter));
             }
-
             return (periodStart, periodEnd);
         }
-
         private static void InsertQ4Data(SqlConnection connection, SqlTransaction transaction, int companyId, int year, DateTime startDate, DateTime endDate, Dictionary<string, object> q4Values)
-        {
-            // Calculate fiscal year based on endDate and quarter
-            // Pass fiscalYearEndDate as endDate since quarter == 4
-            int fiscalYear = CompanyFinancialData.GetFiscalYear(
-                endDate,
-                4,
-                (DateTime?)endDate);
-
-            // Get standardized period dates for Q4
-            (DateTime standardStartDate, DateTime standardEndDate) = Data.GetStandardPeriodDates(
-                fiscalYear,
-                4,
-                (DateTime?)endDate);
-
-            // Initialize the Q4 FinancialDataEntry with standardized dates
-            var q4Entry = new FinancialDataEntry
+        {    // Calculate fiscal year based on endDate and quarter
+            int fiscalYear = CompanyFinancialData.GetFiscalYear(endDate, 4, (DateTime?)endDate);            
+            (DateTime standardStartDate, DateTime standardEndDate) = Data.GetStandardPeriodDates(fiscalYear, 4, (DateTime?)endDate);            
+            var q4Entry = new FinancialDataEntry// Initialize the Q4 FinancialDataEntry with standardized dates
             {
                 CompanyID = companyId,
                 StartDate = startDate, // Parsed StartDate
@@ -542,65 +499,45 @@ WHERE CompanyID = @CompanyID";
                 StandardEndDate = standardEndDate,      // Set StandardEndDate
                 FiscalYearEndDate = endDate             // Set FiscalYearEndDate
             };
-
             var entries = new List<FinancialDataEntry> { q4Entry };
             SaveCompleteEntryToDatabase(entries, connection, transaction).Wait();
         }
         public static async Task CalculateAndSaveQ4InDatabaseAsync(SqlConnection connection, SqlTransaction transaction, int companyId, DataNonStatic dataNonStatic)
-        {
-            // Ensure the CompanyFinancialData is loaded
+        { // Ensure the CompanyFinancialData is loaded
             var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
-
             if (companyData == null)
             {
                 Console.WriteLine($"[ERROR] Failed to load CompanyData for CompanyID: {companyId}. Cannot calculate Q4.");
                 return;
-            }
-
-            // Get the most recent fiscal year end date from the cache
+            }   // Get the most recent fiscal year end date from the cache
             DateTime? fiscalYearEndDate = companyData.GetMostRecentFiscalYearEndDate();
-
             if (!fiscalYearEndDate.HasValue)
             {
                 Console.WriteLine($"[ERROR] No fiscal year end date found for CompanyID: {companyId}. Cannot calculate Q4.");
                 return;
-            }
-
-            // Calculate fiscal year based on fiscalYearEndDate
+            }    // Calculate fiscal year based on fiscalYearEndDate
             int fiscalYear = CompanyFinancialData.GetFiscalYear(fiscalYearEndDate.Value, 0, fiscalYearEndDate);
-
             // Get Standard Period Dates based on Fiscal Year and Quarter
-            (DateTime fiscalYearStartDate, DateTime fiscalYearEndDateActual) = Data.GetStandardPeriodDates(
-                fiscalYear,
-                0,
-                fiscalYearEndDate);
-
-            // Fetch Q3 End Date
-            DateTime q3EndDate = GetQuarterEndDate(connection, transaction, companyId, fiscalYear, 3);
-
-            // Determine Q4 Start Date
-            DateTime q4StartDate;
+            (DateTime fiscalYearStartDate, DateTime fiscalYearEndDateActual) = Data.GetStandardPeriodDates(fiscalYear, 0, fiscalYearEndDate);            
+            DateTime q3EndDate = GetQuarterEndDate(connection, transaction, companyId, fiscalYear, 3);// Fetch Q3 End Date           
+            DateTime q4StartDate; // Determine Q4 Start Date
             if (q3EndDate != DateTime.MinValue)
             {
                 q4StartDate = q3EndDate.AddDays(1);
             }
             else
-            {
-                // If Q3 End Date is missing, calculate based on fiscal year start
+            {    // If Q3 End Date is missing, calculate based on fiscal year start
                 TimeSpan fiscalYearDuration = fiscalYearEndDateActual - fiscalYearStartDate;
                 int daysInFiscalYear = fiscalYearDuration.Days + 1;
                 int daysPerQuarter = daysInFiscalYear / 4;
                 q4StartDate = fiscalYearStartDate.AddDays(3 * daysPerQuarter);
             }
-
             DateTime q4EndDate = fiscalYearEndDateActual;
-
             var q4Values = new Dictionary<string, object>();
             var allElementNames = GetAllFinancialElements(connection, transaction, companyId, fiscalYear); // Get all financial element names                
             ProcessAllFinancialElements(connection, transaction, companyId, fiscalYear, q4Values, allElementNames); // Process all financial elements              
             InsertQ4Data(connection, transaction, companyId, fiscalYear, q4StartDate, q4EndDate, q4Values); // Insert Q4 data
         }
-
         private static List<string> GetAllFinancialElements(SqlConnection connection, SqlTransaction transaction, int companyId, int year)
         {
             var elementNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -631,23 +568,19 @@ WHERE CompanyID = @CompanyID";
         {
             existingEntry.IsXbrlParsed = existingEntry.IsXbrlParsed || newEntry.IsXbrlParsed;
             existingEntry.IsHtmlParsed = existingEntry.IsHtmlParsed || newEntry.IsHtmlParsed;
-
             foreach (var kvp in newEntry.FinancialValues)
             {
                 existingEntry.FinancialValues[kvp.Key] = kvp.Value;
                 existingEntry.FinancialValueTypes[kvp.Key] = newEntry.FinancialValueTypes[kvp.Key];
             }
         }
-
         public static (DateTime periodStart, DateTime periodEnd) GetStandardPeriodDates(
     int fiscalYear, int quarter, DateTime? fiscalYearEndDate = null)
         {
             if (fiscalYearEndDate.HasValue)
             {
                 DateTime fiscalYearStart = fiscalYearEndDate.Value.AddYears(-1).AddDays(1);
-
                 DateTime periodStart, periodEnd;
-
                 switch (quarter)
                 {
                     case 1:
@@ -667,68 +600,54 @@ WHERE CompanyID = @CompanyID";
                         periodEnd = fiscalYearEndDate.Value;
                         break;
                     case 0:
-                        // Annual report covers the entire fiscal year
                         periodStart = fiscalYearStart;
                         periodEnd = fiscalYearEndDate.Value;
                         break;
                     default:
                         throw new ArgumentException("Invalid quarter value", nameof(quarter));
                 }
-
                 Console.WriteLine($"[DEBUG] GetStandardPeriodDates - FiscalYear: {fiscalYear}, Quarter: {quarter}, Start: {periodStart.ToShortDateString()}, End: {periodEnd.ToShortDateString()}");
                 return (periodStart, periodEnd);
             }
             else
-            {
-                // Fallback logic based on calendar year
+            {    // Fallback logic based on calendar year
                 var dates = GetStandardPeriodDatesBasedOnCalendarYear(fiscalYear, quarter);
                 Console.WriteLine($"[DEBUG] GetStandardPeriodDatesBasedOnCalendarYear - FiscalYear: {fiscalYear}, Quarter: {quarter}, Start: {dates.periodStart.ToShortDateString()}, End: {dates.periodEnd.ToShortDateString()}");
                 return dates;
             }
         }
         public static DateTime AdjustToNearestQuarterEndDate(DateTime date)
-        {
-            // Define the possible quarter end dates
+        {       // Define the possible quarter end dates
             DateTime[] quarterEndDates = new[]
             {
         new DateTime(date.Year, 3, 31),
         new DateTime(date.Year, 6, 30),
         new DateTime(date.Year, 9, 30),
         new DateTime(date.Year, 12, 31)
-    };
-
-            // Find the quarter end date closest to the given date
+    };           // Find the quarter end date closest to the given date
             DateTime closestDate = quarterEndDates.OrderBy(d => Math.Abs((d - date).TotalDays)).First();
-
             return closestDate;
         }
-
-
         public static int GetFiscalYear(DateTime endDate, int quarter, DateTime? fiscalYearEndDate = null)
         {
             if (fiscalYearEndDate.HasValue)
             {
                 DateTime fiscalYearStart = fiscalYearEndDate.Value.AddYears(-1).AddDays(1);
-
                 if (endDate > fiscalYearEndDate.Value)
-                {
-                    // End date is after fiscal year-end, so it's in the next fiscal year
+                {         // End date is after fiscal year-end, so it's in the next fiscal year
                     return fiscalYearEndDate.Value.AddYears(1).Year;
                 }
                 else if (endDate >= fiscalYearStart)
-                {
-                    // End date is within the fiscal year
+                {          // End date is within the fiscal year
                     return fiscalYearEndDate.Value.Year;
                 }
                 else
-                {
-                    // End date is before the fiscal year start, so it's in the previous fiscal year
+                {     // End date is before the fiscal year start, so it's in the previous fiscal year
                     return fiscalYearEndDate.Value.AddYears(-1).Year;
                 }
             }
             else
-            {
-                // Fallback logic if fiscalYearEndDate is not available
+            {// Fallback logic if fiscalYearEndDate is not available
                 switch (quarter)
                 {
                     case 1:
@@ -745,50 +664,33 @@ WHERE CompanyID = @CompanyID";
                 }
             }
         }
-
         public static DateTime CalculateFiscalYearStartDate(DateTime fiscalYearEndDate)
         {
             DateTime fiscalYearStartDate = fiscalYearEndDate.AddDays(1).AddYears(-1);
             return fiscalYearStartDate;
         }
-
-
         public static async Task SaveCompleteEntryToDatabase(List<FinancialDataEntry> entries, SqlConnection connection, SqlTransaction transaction)
         {
             if (entries == null || !entries.Any()) return;
-
             DataTable table = CreateDataTable(entries, connection, transaction);
-
-            // Fetch existing records to identify duplicates
-            // Define a leeway period (e.g., 5 days)
             TimeSpan leeway = TimeSpan.FromDays(15);
-
-            // Update the method call to include the leeway parameter
             DataTable existingRows = FetchExistingRows(connection, transaction, entries.First().CompanyID, table, leeway);
-
-
             // Determine rows to insert (exclude existing ones)
             var rowsToInsertEnumerable = table.AsEnumerable().Where(newRow =>
                 !existingRows.AsEnumerable().Any(existingRow =>
                     existingRow.Field<int>("CompanyID") == newRow.Field<int>("CompanyID") &&
                     existingRow.Field<DateTime>("StartDate") == newRow.Field<DateTime>("StartDate") &&
                     existingRow.Field<DateTime>("EndDate") == newRow.Field<DateTime>("EndDate")));
-
             DataTable rowsToInsert = null;
             if (rowsToInsertEnumerable.Any())
             {
                 rowsToInsert = rowsToInsertEnumerable.CopyToDataTable();
             }
-
             if (rowsToInsert != null && rowsToInsert.Rows.Count > 0)
-            {
-                // Perform bulk insert for new rows
+            {  // Perform bulk insert for new rows
                 await BulkInsert(rowsToInsert, connection, transaction);
-            }
-
-            // Update the method call to include the leeway
+            }   // Update the method call to include the leeway
             await UpdateExistingRecords(entries, connection, transaction, existingRows, leeway);
-
         }
         public static bool IsValidDateFormat(string text)
         {
@@ -797,7 +699,6 @@ WHERE CompanyID = @CompanyID";
                              @"^\d{1,2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}$";
             return Regex.IsMatch(text, pattern);
         }
-
         private static async Task BulkInsert(DataTable table, SqlConnection connection, SqlTransaction transaction)
         {
             using (SqlBulkCopy bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
@@ -826,7 +727,6 @@ WHERE CompanyID = @CompanyID";
                     row.Field<int>("CompanyID") == entry.CompanyID &&
                     Math.Abs((row.Field<DateTime>("StartDate") - entry.StartDate).TotalDays) <= leeway.TotalDays &&
                     Math.Abs((row.Field<DateTime>("EndDate") - entry.EndDate).TotalDays) <= leeway.TotalDays);
-
                 if (existingRow != null)
                 {  // Retrieve existing FinancialDataJson from the database
                     string selectQuery = @"
@@ -853,8 +753,7 @@ WHERE CompanyID = @CompanyID";
                     } // selectCommand is disposed here
                     if (existingJson != null)
                     {
-                        var existingFinancialValues = ParseFinancialDataJson(existingJson);
-                        // Merge the existing data with the new data
+                        var existingFinancialValues = ParseFinancialDataJson(existingJson);   // Merge the existing data with the new data
                         var mergedFinancialValues = new Dictionary<string, object>(existingFinancialValues, StringComparer.OrdinalIgnoreCase);
                         foreach (var kvp in entry.FinancialValues)
                         {
@@ -900,14 +799,12 @@ WHERE CompanyID = @CompanyID";
                 DateTime maxStartDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("StartDate")).Max().AddDays(leeway.TotalDays);
                 DateTime minEndDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("EndDate")).Min().AddDays(-leeway.TotalDays);
                 DateTime maxEndDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("EndDate")).Max().AddDays(leeway.TotalDays);
-
                 string query = @"
             SELECT CompanyID, StartDate, EndDate
             FROM FinancialData
             WHERE CompanyID = @CompanyID
             AND StartDate BETWEEN @MinStartDate AND @MaxStartDate
             AND EndDate BETWEEN @MinEndDate AND @MaxEndDate";
-
                 using (SqlCommand command = new SqlCommand(query, connection, transaction))
                 {
                     command.Parameters.AddWithValue("@CompanyID", companyId);
@@ -934,37 +831,26 @@ WHERE CompanyID = @CompanyID";
             table.Columns.Add("FinancialDataJson", typeof(string));
             table.Columns.Add("IsHtmlParsed", typeof(bool));
             table.Columns.Add("IsXbrlParsed", typeof(bool));
-
             var uniqueRows = new HashSet<(int CompanyID, DateTime StartDate, DateTime EndDate)>();
-
             foreach (var entry in entries)
             {
                 if (entry.StandardStartDate < new DateTime(1753, 1, 1) || entry.StandardEndDate < new DateTime(1753, 1, 1))
                 {
                     continue; // Skip invalid dates
                 }
-
                 var uniqueKey = (entry.CompanyID, entry.StandardStartDate, entry.StandardEndDate);
                 if (uniqueRows.Contains(uniqueKey))
                 {
                     continue; // Skip duplicates
                 }
                 uniqueRows.Add(uniqueKey);
-
                 DataRow row = table.NewRow();
                 row["CompanyID"] = entry.CompanyID;
                 row["StartDate"] = entry.StandardStartDate;
                 row["EndDate"] = entry.StandardEndDate;
-                row["Quarter"] = entry.Quarter;
-
-                // Calculate Fiscal Year based on standardized EndDate and FiscalYearEndDate
-                int fiscalYear = Data.GetFiscalYear(
-                    entry.StandardEndDate,
-                    entry.Quarter,
-                    entry.FiscalYearEndDate);
-
+                row["Quarter"] = entry.Quarter;   // Calculate Fiscal Year based on standardized EndDate and FiscalYearEndDate
+                int fiscalYear = Data.GetFiscalYear(entry.StandardEndDate, entry.Quarter, entry.FiscalYearEndDate);
                 row["Year"] = fiscalYear; // Set Year as an integer
-
                 row["FinancialDataJson"] = JsonConvert.SerializeObject(entry.FinancialValues);
                 row["IsHtmlParsed"] = entry.IsHtmlParsed;
                 row["IsXbrlParsed"] = entry.IsXbrlParsed;
@@ -972,7 +858,6 @@ WHERE CompanyID = @CompanyID";
             }
             return table;
         }
-
         public static DateTime GetFiscalYearEndForSpecificYearWithFallback(int companyId, int year, SqlConnection connection, SqlTransaction transaction)
         {
             try
@@ -1024,23 +909,18 @@ WHERE CompanyID = @CompanyID";
         }
         public static int CalculateQuarterByFiscalDayMonth(DateTime reportDate, DateTime fiscalYearEndDate, int leewayDays = 15)
         {
-            DateTime fiscalYearStart = fiscalYearEndDate.AddYears(-1).AddDays(1);
-
-            // Adjust if reportDate is after fiscalYearEndDate
+            DateTime fiscalYearStart = fiscalYearEndDate.AddYears(-1).AddDays(1);// Adjust if reportDate is after fiscalYearEndDate
             if (reportDate > fiscalYearEndDate)
             {
                 fiscalYearStart = fiscalYearEndDate.AddDays(1);
                 fiscalYearEndDate = fiscalYearEndDate.AddYears(1);
             }
-
             int daysFromFiscalStart = (reportDate - fiscalYearStart).Days;
             int totalFiscalDays = (fiscalYearEndDate - fiscalYearStart).Days + 1;
             int daysPerQuarter = totalFiscalDays / 4;
-
             int q1Boundary = daysPerQuarter + leewayDays;
             int q2Boundary = 2 * daysPerQuarter + leewayDays;
             int q3Boundary = 3 * daysPerQuarter + leewayDays;
-
             if (daysFromFiscalStart < q1Boundary)
                 return 1;
             else if (daysFromFiscalStart < q2Boundary)

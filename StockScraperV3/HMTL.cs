@@ -24,8 +24,6 @@ namespace HTML
     {
         private static List<ChromeDriver> driverPool = new List<ChromeDriver>();
         private static SemaphoreSlim driverSemaphore = new SemaphoreSlim(5, 5); // Allow up to 5 concurrent drivers
-
-        // Define the normalization mapping
         private static readonly Dictionary<string, string> normalizedStatementTypeMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             { "operations", "Statement_of_Operations" },
@@ -35,22 +33,15 @@ namespace HTML
             { "cash flow statement", "Cashflow_Statement" },
             { "income statement", "Income_Statement" },
             { "balance sheet", "Balance_Sheet" },
-            // Add other mappings as necessary
         };
-        // Add this method within the HTML class.
+
         private static string ConstructHtmlElementName(int quarter, int year, string statementType, string elementLabel)
         {
-            // Sanitize the statement type and element label to remove spaces and special characters
             string sanitizedStatementType = Regex.Replace(statementType, @"[\s:()]", "");
             string sanitizedElementLabel = Regex.Replace(elementLabel, @"[\s:()]", "");
-
-            // Ensure that the element label does not contain colons or other unwanted characters
             sanitizedElementLabel = sanitizedElementLabel.Replace(":", "");
-
             return $"HTML_Q{quarter}Report{year}_{sanitizedStatementType}_{sanitizedElementLabel}";
         }
-
-
         public static async Task InitializeDriverPool()
         {
             for (int i = 0; i < 5; i++)
@@ -59,7 +50,6 @@ namespace HTML
                 driverPool.Add(driver);
             }
         }
-
         public static ChromeDriver StartNewSession()
         {
             ChromeOptions options = new ChromeOptions();
@@ -72,7 +62,6 @@ namespace HTML
             string chromeDriverPath = @"C:\Users\kiera\Downloads\chromedriver-win64\chromedriver-win64\chromedriver.exe";  // Path to chromedriver.exe
             return new ChromeDriver(chromeDriverPath, options);
         }
-
         public static async Task<string> GetElementTextWithRetry(IWebDriver driver, By locator, int retryCount = 3)
         {
             var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(5));
@@ -98,40 +87,17 @@ namespace HTML
             }
             return string.Empty;
         }
-
-        /// <summary>
-        /// Adjusts the given date to the nearest quarter end date.
-        /// Quarter end dates are March 31st, June 30th, September 30th, and December 31st.
-        /// </summary>
-        /// <param name="date">The date to adjust.</param>
-        /// <returns>The nearest quarter end date.</returns>
         public static DateTime AdjustToNearestQuarterEndDate(DateTime date)
-        {
-            // Define the possible quarter end dates for the given year
+        {  // Define the possible quarter end dates for the given year
             DateTime q1End = new DateTime(date.Year, 3, 31);
             DateTime q2End = new DateTime(date.Year, 6, 30);
             DateTime q3End = new DateTime(date.Year, 9, 30);
-            DateTime q4End = new DateTime(date.Year, 12, 31);
-
-            // Calculate the difference in days between the date and each quarter end
+            DateTime q4End = new DateTime(date.Year, 12, 31);  // Calculate the difference in days between the date and each quarter end
             var quarterEnds = new List<DateTime> { q1End, q2End, q3End, q4End };
             var closestQuarterEnd = quarterEnds.OrderBy(q => Math.Abs((q - date).TotalDays)).First();
-
             return closestQuarterEnd;
         }
-
-        /// <summary>
-        /// Main method to process interactive data from the given URL.
-        /// </summary>
-        public static async Task ProcessInteractiveData(
-            ChromeDriver driver, // Added ChromeDriver as the first parameter
-            string interactiveDataUrl,
-            string companyName,
-            string companySymbol,
-            bool isAnnualReport,
-            string filingUrl,
-            int companyId,
-            DataNonStatic dataNonStatic)
+        public static async Task ProcessInteractiveData(ChromeDriver driver, string interactiveDataUrl, string companyName, string companySymbol, bool isAnnualReport, string filingUrl, int companyId, DataNonStatic dataNonStatic)
         {
             var parsedEntries = new List<FinancialDataEntry>(); // List to accumulate parsed entries
             await driverSemaphore.WaitAsync();
@@ -142,7 +108,6 @@ namespace HTML
                 int retries = 0;
                 const int maxRetries = 3;
                 const int retryDelay = 5000;
-
                 while (!loadedSuccessfully && retries < maxRetries)
                 {
                     try
@@ -152,10 +117,8 @@ namespace HTML
                         wait.Until(d => ((IJavaScriptExecutor)d).ExecuteScript("return document.readyState").Equals("complete"));
                         loadedSuccessfully = true;
                         await Task.Delay(1000);  // Small delay to ensure page content is fully loaded
-
                         var financialStatementButtons = driver.FindElements(By.XPath("//a[starts-with(@id, 'menu_cat') and contains(text(), 'Financial Statements') and not(contains(text(), 'Notes'))]"));
                         bool isFirstReport = true;
-
                         foreach (var financialStatementsButton in financialStatementButtons)
                         {
                             try
@@ -164,37 +127,23 @@ namespace HTML
                                 await Task.Delay(500);
                                 ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", financialStatementsButton);
                                 await Task.Delay(1000);
-
                                 var accordionElements = driver.FindElements(By.XPath("//ul[@style='display: block;']//li[contains(@class, 'accordion')]//a[contains(@class, 'xbrlviewer')]"));
                                 if (accordionElements.Count == 0)
                                 {
                                     continue;
                                 }
-
                                 foreach (var accordionElement in accordionElements)
                                 {
                                     try
-                                    {
-                                        // Extract the statement name from the button text
+                                    { // Extract the statement name from the button text
                                         string statementName = accordionElement.Text.Trim();
-
                                         ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", accordionElement);
                                         await Task.Delay(800);
                                         ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", accordionElement);
                                         await Task.Delay(1000);
-
                                         var reportElement = wait.Until(ExpectedConditions.ElementIsVisible(By.XPath("//table[contains(@class, 'report')]")));
                                         string reportHtml = reportElement.GetAttribute("outerHTML");
-
-                                        var parsedHtmlElements = await ParseHtmlForElementsOfInterest(
-                                            reportHtml,
-                                            isAnnualReport,
-                                            companyName,
-                                            companySymbol,
-                                            companyId,
-                                            dataNonStatic,
-                                            statementName);  // Pass the statement name to the parsing method
-
+                                        var parsedHtmlElements = await ParseHtmlForElementsOfInterest(reportHtml, isAnnualReport, companyName, companySymbol, companyId, dataNonStatic, statementName);  
                                         if (parsedHtmlElements.Count == 0)
                                         {
                                             continue;
@@ -234,14 +183,7 @@ namespace HTML
                 driverSemaphore.Release(); // Release the driver slot
             }
         }
-        public static async Task<List<string>> ParseHtmlForElementsOfInterest(
-     string htmlContent,
-     bool isAnnualReport,
-     string companyName,
-     string companySymbol,
-     int companyId,
-     DataNonStatic dataNonStatic,
-     string statementName)
+        public static async Task<List<string>> ParseHtmlForElementsOfInterest(string htmlContent, bool isAnnualReport, string companyName, string companySymbol, int companyId, DataNonStatic dataNonStatic, string statementName)
         {
             var elements = new List<string>(); // This will store parsed elements
             try
@@ -249,69 +191,43 @@ namespace HTML
                 var htmlDocument = new HtmlDocument();
                 htmlDocument.LoadHtml(htmlContent);
                 var tables = htmlDocument.DocumentNode.SelectNodes("//table[contains(@class, 'report')]");
-
                 if (tables == null || tables.Count == 0)
                 {
                     Console.WriteLine($"[ERROR] No tables with class 'report' found for {companyName} ({companySymbol}).");
                     return elements; // Return the empty list if no tables found
                 }
-
                 foreach (var table in tables)
                 {
                     var rows = table.SelectNodes(".//tr");
                     if (rows == null)
                     {
                         continue;
-                    }
-
-                    // Extract fiscal year end date from the table headers
-                    DateTime? fiscalYearEndDate = ExtractDateFromThTags(table);
+                    }                    
+                    DateTime? fiscalYearEndDate = ExtractDateFromThTags(table);// Extract fiscal year end date from the table headers
                     if (!fiscalYearEndDate.HasValue)
                     {
                         Console.WriteLine($"[ERROR] Could not extract the fiscal year end date for {companyName} ({companySymbol}).");
                         continue;
                     }
-
                     Console.WriteLine($"[DEBUG] Extracted fiscal year end date: {fiscalYearEndDate.Value.ToShortDateString()} for {companyName} ({companySymbol})");
-
-                    // Adjust fiscal year end date based on report type
-                    DateTime adjustedFiscalYearEndDate = isAnnualReport
+                     DateTime adjustedFiscalYearEndDate = isAnnualReport// Adjust fiscal year end date based on report type
                         ? fiscalYearEndDate.Value // Do not adjust for annual reports
                         : Data.Data.AdjustToNearestQuarterEndDate(fiscalYearEndDate.Value); // Adjust for quarterly reports
-
-                    Console.WriteLine($"[DEBUG] Adjusted fiscal year end date: {adjustedFiscalYearEndDate.ToShortDateString()} for {companyName} ({companySymbol})");
-
-                    // Retrieve the CompanyFinancialData from the cache
-                    var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
-
+                    Console.WriteLine($"[DEBUG] Adjusted fiscal year end date: {adjustedFiscalYearEndDate.ToShortDateString()} for {companyName} ({companySymbol})");  
+                    var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);// Retrieve the CompanyFinancialData from the cache
                     if (companyData == null)
                     {
                         Console.WriteLine($"[ERROR] Failed to load CompanyData for CompanyID: {companyId}. Skipping parsing.");
                         continue;
-                    }
-
-                    // Determine fiscal year based on adjustedFiscalYearEndDate
-                    int fiscalYear = Data.Data.GetFiscalYear(
-                        adjustedFiscalYearEndDate,
-                        isAnnualReport ? 0 : -1, // Assuming -1 means to calculate quarter from date
-                        adjustedFiscalYearEndDate);
-
+                    }         // Determine fiscal year based on adjustedFiscalYearEndDate
+                    int fiscalYear = Data.Data.GetFiscalYear(adjustedFiscalYearEndDate, isAnnualReport ? 0 : -1, adjustedFiscalYearEndDate);
                     Console.WriteLine($"[DEBUG] Determined fiscal year: {fiscalYear} for {companyName} ({companySymbol})");
-
                     // Determine the quarter
-                    int quarter = isAnnualReport ? 0 : Data.Data.CalculateQuarterByFiscalDayMonth(
-                        adjustedFiscalYearEndDate, adjustedFiscalYearEndDate);
-
+                    int quarter = isAnnualReport ? 0 : Data.Data.CalculateQuarterByFiscalDayMonth(adjustedFiscalYearEndDate, adjustedFiscalYearEndDate);
                     Console.WriteLine($"[DEBUG] Determined quarter: {quarter} for {companyName} ({companySymbol})");
-
                     // Get standardized period dates based on fiscal year and quarter
-                    (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(
-                        fiscalYear,
-                        quarter,
-                        adjustedFiscalYearEndDate);
-
+                    (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(fiscalYear, quarter, adjustedFiscalYearEndDate);
                     Console.WriteLine($"[DEBUG] Standard period dates: Start - {standardStartDate.ToShortDateString()}, End - {standardEndDate.ToShortDateString()} for {companyName} ({companySymbol})");
-
                     // Initialize the FinancialDataEntry with standardized dates
                     var parsedData = new FinancialDataEntry
                     {
@@ -326,14 +242,9 @@ namespace HTML
                         StandardStartDate = standardStartDate,
                         StandardEndDate = standardEndDate,
                         FiscalYearEndDate = adjustedFiscalYearEndDate
-                    };
-
-                   
-
-                    // Extract scaling factors
-                    var (sharesMultiplier, dollarMultiplier) = ExtractScalingFactor(htmlDocument);
+                    };          
+                    var (sharesMultiplier, dollarMultiplier) = ExtractScalingFactor(htmlDocument); // Extract scaling factors
                     Console.WriteLine($"[DEBUG] Extracted scaling factors: SharesMultiplier = {sharesMultiplier}, DollarMultiplier = {dollarMultiplier}");
-
                     foreach (var row in rows) // Process the data rows
                     {
                         var cells = row.SelectNodes(".//td|.//th");
@@ -341,7 +252,6 @@ namespace HTML
                         {
                             continue;
                         }
-
                         var label = cells[0].InnerText.Trim();
                         var valueCell = cells.FirstOrDefault(cell => cell.Attributes["class"]?.Value.Contains("nump") == true);
                         if (valueCell != null)
@@ -355,27 +265,15 @@ namespace HTML
                             else
                             {
                                 continue;
-                            }
-
-                            // Use fiscalYear directly
-                            int year = fiscalYear;
-
-                            // Normalize the statement type
-                            string normalizedStatementType = NormalizeStatementName(statementName);
-
-                            // Construct the element name
-                            string elementName = ConstructHtmlElementName(quarter, fiscalYear, normalizedStatementType, label);
-
-                            // Add the element to the parsed data
-                            parsedData.FinancialValues[elementName] = value;
-                            parsedData.FinancialValueTypes[elementName] = typeof(double);
-
-                            // Add the element label to the parsed elements list
-                            elements.Add(label);
+                            }                   
+                            int year = fiscalYear;                            
+                            string normalizedStatementType = NormalizeStatementName(statementName);                            
+                            string elementName = ConstructHtmlElementName(quarter, fiscalYear, normalizedStatementType, label);// Construct the element name  
+                            parsedData.FinancialValues[elementName] = value;// Add the element to the parsed data
+                            parsedData.FinancialValueTypes[elementName] = typeof(double);                            
+                            elements.Add(label);// Add the element label to the parsed elements list
                         }
-                    }
-
-                    // Add the fully populated FinancialDataEntry to dataNonStatic
+                    }      // Add the fully populated FinancialDataEntry to dataNonStatic
                     await dataNonStatic.AddParsedDataAsync(companyId, parsedData);
                     Console.WriteLine($"[INFO] Added FinancialDataEntry for CompanyID: {companyId}, FiscalYear: {fiscalYear}, Quarter: {quarter}");
                 }
@@ -387,16 +285,13 @@ namespace HTML
 
             return elements;
         }
-
         private static async Task<int> DetermineQuarter(int companyId, DateTime reportDate)
         {
             using (SqlConnection connection = new SqlConnection(Nasdaq100FinancialScraper.Program.connectionString))
             {
                 await connection.OpenAsync();
-
                 // Fetch fiscalYearEndDate for the company from the database
                 DateTime fiscalYearEndDate = Data.Data.GetFiscalYearEndForSpecificYearWithFallback(companyId, reportDate.Year, connection, null);
-
                 // Call CalculateQuarterByFiscalDayMonth with the fetched fiscalYearEndDate
                 return Data.Data.CalculateQuarterByFiscalDayMonth(reportDate, fiscalYearEndDate, leewayDays: 15);
             }
