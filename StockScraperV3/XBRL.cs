@@ -105,12 +105,12 @@ namespace XBRL
             }
         }
         public static async Task ParseTraditionalXbrlContent(
-    string xbrlContent,
-    bool isAnnualReport,
-    string companyName,
-    string companySymbol,
-    DataNonStatic dataNonStatic,
-    int companyId)
+   string xbrlContent,
+   bool isAnnualReport,
+   string companyName,
+   string companySymbol,
+   DataNonStatic dataNonStatic,
+   int companyId)
         {
             var parsedEntries = new List<FinancialDataEntry>();
 
@@ -543,8 +543,6 @@ namespace XBRL
 
             return elements;
         }
-
-
 
         public static DateTime AdjustEndDate(DateTime endDate, bool isAnnualReport)
         {

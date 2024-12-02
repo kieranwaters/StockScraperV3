@@ -33,13 +33,37 @@ namespace Data
         }
         public void AddOrUpdateEntry(FinancialDataEntry entry)
         {
-            string key = GenerateKey(entry);
-            FinancialEntries.AddOrUpdate(key, entry, (existingKey, existingEntry) =>
+            // Define a leeway period (e.g., +/- 5 days)
+            TimeSpan leeway = TimeSpan.FromDays(5);
+
+            // Try to find an existing key within the leeway period
+            var existingEntryKey = FinancialEntries.Keys.FirstOrDefault(key =>
             {
-                existingEntry.MergeEntries(entry);
-                return existingEntry;
+                var parts = key.Split('_');
+                if (parts.Length != 3) return false;
+                if (int.TryParse(parts[1], out int startDateInt) && int.TryParse(parts[2], out int endDateInt))
+                {
+                    DateTime existingStartDate = DateTime.ParseExact(startDateInt.ToString(), "yyyyMMdd", null);
+                    DateTime existingEndDate = DateTime.ParseExact(endDateInt.ToString(), "yyyyMMdd", null);
+                    return Math.Abs((existingStartDate - entry.StartDate).TotalDays) <= leeway.TotalDays &&
+                           Math.Abs((existingEndDate - entry.EndDate).TotalDays) <= leeway.TotalDays;
+                }
+                return false;
             });
+
+            if (existingEntryKey != null)
+            {
+                // Merge with the existing entry
+                FinancialEntries[existingEntryKey].MergeEntries(entry);
+            }
+            else
+            {
+                // Add as a new entry
+                string key = GenerateKey(entry);
+                FinancialEntries[key] = entry;
+            }
         }
+
         public static int GetFiscalYear(DateTime endDate, int quarter, DateTime? fiscalYearEndDate = null)
         {
             if (fiscalYearEndDate.HasValue)
@@ -83,13 +107,15 @@ namespace Data
 
         private string GenerateKey(FinancialDataEntry entry)
         {
-            int fiscalYear = Data.GetFiscalYear(
-                entry.StandardEndDate, entry.Quarter, entry.FiscalYearEndDate);
+            // Format the dates to a consistent string format (e.g., yyyyMMdd)
+            string startDateStr = entry.StartDate.ToString("yyyyMMdd");
+            string endDateStr = entry.EndDate.ToString("yyyyMMdd");
 
-            string key = $"{entry.CompanyID}_{fiscalYear}_Q{entry.Quarter}";
-            Console.WriteLine($"[DEBUG] Generated Key: {key} for CompanyID: {entry.CompanyID}, FiscalYear: {fiscalYear}, Quarter: {entry.Quarter}");
+            string key = $"{entry.CompanyID}_{startDateStr}_{endDateStr}";
+            Console.WriteLine($"[DEBUG] Generated Key: {key} for CompanyID: {entry.CompanyID}, StartDate: {entry.StartDate.ToShortDateString()}, EndDate: {entry.EndDate.ToShortDateString()}");
             return key;
         }
+
 
 
         public List<FinancialDataEntry> GetCompletedEntries()// Method to retrieve all completed entries
@@ -143,63 +169,61 @@ namespace Data
             return companyData;
         }
         public async Task SaveEntriesToDatabaseAsync(int companyId, List<FinancialDataEntry> entries)
+{
+    if (entries == null || !entries.Any()) return;
+    try
+    {
+        var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
+        foreach (var entry in entries)
         {
-            if (entries == null || !entries.Any()) return;
-            try
+            companyData.AddOrUpdateEntry(entry);
+        }
+
+        var mergedEntries = companyData.FinancialEntries.Values
+            .Where(e => e.IsEntryComplete())
+            .ToList();
+
+        if (!mergedEntries.Any())
+        {
+            return;
+        }
+
+        using (SqlConnection connection = new SqlConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            using (SqlTransaction transaction = connection.BeginTransaction())
             {
-                // Update the cache first to merge entries
-                var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
-                foreach (var entry in entries)
+                try
                 {
-                    companyData.AddOrUpdateEntry(entry);
+                    // Define leeway (e.g., 5 days)
+                    TimeSpan leeway = TimeSpan.FromDays(5);
+
+                    await Data.SaveCompleteEntryToDatabase(mergedEntries, connection, transaction);
+                    transaction.Commit();
                 }
-
-                // Now, retrieve the merged entries from the cache
-                // Filter to only include entries where both IsHtmlParsed and IsXbrlParsed are true
-                var mergedEntries = companyData.FinancialEntries.Values
-                    .Where(e => e.IsHtmlParsed && e.IsXbrlParsed)
-                    .ToList();
-
-                if (!mergedEntries.Any())
+                catch (Exception ex)
                 {
-                    // No complete entries to save
-                    return;
-                }
-
-                // Save the merged entries to the database
-                using (SqlConnection connection = new SqlConnection(connectionString))
-                {
-                    await connection.OpenAsync();
-                    using (SqlTransaction transaction = connection.BeginTransaction())
+                    Console.WriteLine($"[ERROR] Transaction failed while saving entries: {ex.Message}");
+                    try
                     {
-                        try
-                        {
-                            // Save to the database
-                            await Data.SaveCompleteEntryToDatabase(mergedEntries, connection, transaction);
-                            transaction.Commit();
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ERROR] Transaction failed while saving entries: {ex.Message}");
-                            try
-                            {
-                                transaction.Rollback();
-                                Console.WriteLine("[INFO] Transaction rolled back.");
-                            }
-                            catch (Exception rollbackEx)
-                            {
-                                Console.WriteLine($"[ERROR] Transaction rollback failed: {rollbackEx.Message}");
-                            }
-                            throw;
-                        }
+                        transaction.Rollback();
+                        Console.WriteLine("[INFO] Transaction rolled back.");
                     }
+                    catch (Exception rollbackEx)
+                    {
+                        Console.WriteLine($"[ERROR] Transaction rollback failed: {rollbackEx.Message}");
+                    }
+                    throw;
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERROR] Failed to save entries to database: {ex.Message}");
             }
         }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Failed to save entries to database: {ex.Message}");
+    }
+}
+
         private async Task<List<FinancialDataEntry>> LoadFinancialDataFromDatabaseAsync(int companyId)
         {
             var entries = new List<FinancialDataEntry>();
@@ -607,21 +631,14 @@ WHERE CompanyID = @CompanyID";
         {
             existingEntry.IsXbrlParsed = existingEntry.IsXbrlParsed || newEntry.IsXbrlParsed;
             existingEntry.IsHtmlParsed = existingEntry.IsHtmlParsed || newEntry.IsHtmlParsed;
+
             foreach (var kvp in newEntry.FinancialValues)
             {
-                string elementName = kvp.Key;
-                object value = kvp.Value;
-                existingEntry.FinancialValues[elementName] = value;
-                if (newEntry.FinancialValueTypes != null && newEntry.FinancialValueTypes.TryGetValue(elementName, out var type))
-                {
-                    existingEntry.FinancialValueTypes[elementName] = type;
-                }
-                else
-                {
-                    existingEntry.FinancialValueTypes[elementName] = value?.GetType() ?? typeof(object);
-                }
+                existingEntry.FinancialValues[kvp.Key] = kvp.Value;
+                existingEntry.FinancialValueTypes[kvp.Key] = newEntry.FinancialValueTypes[kvp.Key];
             }
         }
+
         public static (DateTime periodStart, DateTime periodEnd) GetStandardPeriodDates(
     int fiscalYear, int quarter, DateTime? fiscalYearEndDate = null)
         {
@@ -743,7 +760,12 @@ WHERE CompanyID = @CompanyID";
             DataTable table = CreateDataTable(entries, connection, transaction);
 
             // Fetch existing records to identify duplicates
-            DataTable existingRows = FetchExistingRows(connection, transaction, entries.First().CompanyID, table);
+            // Define a leeway period (e.g., 5 days)
+            TimeSpan leeway = TimeSpan.FromDays(15);
+
+            // Update the method call to include the leeway parameter
+            DataTable existingRows = FetchExistingRows(connection, transaction, entries.First().CompanyID, table, leeway);
+
 
             // Determine rows to insert (exclude existing ones)
             var rowsToInsertEnumerable = table.AsEnumerable().Where(newRow =>
@@ -764,8 +786,9 @@ WHERE CompanyID = @CompanyID";
                 await BulkInsert(rowsToInsert, connection, transaction);
             }
 
-            // Update existing records
-            await UpdateExistingRecords(entries, connection, transaction, existingRows);
+            // Update the method call to include the leeway
+            await UpdateExistingRecords(entries, connection, transaction, existingRows, leeway);
+
         }
         public static bool IsValidDateFormat(string text)
         {
@@ -795,14 +818,15 @@ WHERE CompanyID = @CompanyID";
                 }
             }
         }
-        private static async Task UpdateExistingRecords(List<FinancialDataEntry> entries, SqlConnection connection, SqlTransaction transaction, DataTable existingRows)
+        private static async Task UpdateExistingRecords(List<FinancialDataEntry> entries, SqlConnection connection, SqlTransaction transaction, DataTable existingRows, TimeSpan leeway)
         {
             foreach (var entry in entries)
             {
                 var existingRow = existingRows.AsEnumerable().FirstOrDefault(row =>
                     row.Field<int>("CompanyID") == entry.CompanyID &&
-                    row.Field<DateTime>("StartDate") == entry.StandardStartDate &&
-                    row.Field<DateTime>("EndDate") == entry.StandardEndDate);
+                    Math.Abs((row.Field<DateTime>("StartDate") - entry.StartDate).TotalDays) <= leeway.TotalDays &&
+                    Math.Abs((row.Field<DateTime>("EndDate") - entry.EndDate).TotalDays) <= leeway.TotalDays);
+
                 if (existingRow != null)
                 {  // Retrieve existing FinancialDataJson from the database
                     string selectQuery = @"
@@ -867,25 +891,30 @@ WHERE CompanyID = @CompanyID";
                 }
             }
         }
-        public static DataTable FetchExistingRows(SqlConnection connection, SqlTransaction transaction, int companyId, DataTable newRows)
+        public static DataTable FetchExistingRows(SqlConnection connection, SqlTransaction transaction, int companyId, DataTable newRows, TimeSpan leeway)
         {
             DataTable existingRows = new DataTable();
             if (newRows.Rows.Count > 0)
             {
+                DateTime minStartDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("StartDate")).Min().AddDays(-leeway.TotalDays);
+                DateTime maxStartDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("StartDate")).Max().AddDays(leeway.TotalDays);
+                DateTime minEndDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("EndDate")).Min().AddDays(-leeway.TotalDays);
+                DateTime maxEndDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("EndDate")).Max().AddDays(leeway.TotalDays);
+
                 string query = @"
             SELECT CompanyID, StartDate, EndDate
             FROM FinancialData
-            WHERE CompanyID = @CompanyID AND StartDate IN ({0}) AND EndDate IN ({1})";
-
-                var startDates = newRows.AsEnumerable().Select(row => $"'{row.Field<DateTime>("StartDate"):yyyy-MM-dd}'").Distinct();
-                var endDates = newRows.AsEnumerable().Select(row => $"'{row.Field<DateTime>("EndDate"):yyyy-MM-dd}'").Distinct();
-                string startDateList = string.Join(",", startDates);
-                string endDateList = string.Join(",", endDates);
-                query = string.Format(query, startDateList, endDateList);
+            WHERE CompanyID = @CompanyID
+            AND StartDate BETWEEN @MinStartDate AND @MaxStartDate
+            AND EndDate BETWEEN @MinEndDate AND @MaxEndDate";
 
                 using (SqlCommand command = new SqlCommand(query, connection, transaction))
                 {
                     command.Parameters.AddWithValue("@CompanyID", companyId);
+                    command.Parameters.AddWithValue("@MinStartDate", minStartDate);
+                    command.Parameters.AddWithValue("@MaxStartDate", maxStartDate);
+                    command.Parameters.AddWithValue("@MinEndDate", minEndDate);
+                    command.Parameters.AddWithValue("@MaxEndDate", maxEndDate);
                     using (SqlDataAdapter adapter = new SqlDataAdapter(command))
                     {
                         adapter.Fill(existingRows);
@@ -894,7 +923,6 @@ WHERE CompanyID = @CompanyID";
             }
             return existingRows;
         }
-
         public static DataTable CreateDataTable(List<FinancialDataEntry> entries, SqlConnection connection, SqlTransaction transaction)
         {
             DataTable table = new DataTable();
