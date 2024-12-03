@@ -66,7 +66,6 @@ namespace Data
                 FinancialEntries[key] = entry;
             }
         }
-
         public static int GetFiscalYear(DateTime endDate, int quarter, DateTime? fiscalYearEndDate = null)
         {
             if (fiscalYearEndDate.HasValue)
