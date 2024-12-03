@@ -125,19 +125,11 @@ namespace StockScraperV3
 
             return normalised;
         }
-        public static async Task ProcessFilings(
-    ChromeDriver driver,
-    List<(string url, string description)> filings,
-    string companyName,
-    string companySymbol,
-    int companyId,
-    int groupIndex,
-    DataNonStatic dataNonStatic) // Accept shared DataNonStatic instance
+        public static async Task ProcessFilings(ChromeDriver driver, List<(string url, string description)> filings, string companyName, string companySymbol, int companyId, int groupIndex, DataNonStatic dataNonStatic) // Accept shared DataNonStatic instance
         {
             int parsedReportsCount = 0;
             int totalReportsToParse = filings.Count(filing => filing.description.Contains("10-K") || filing.description.Contains("10-Q"));
             const int leewayDays = 0;
-
             foreach (var filing in filings) // Process each filing
             {
                 string url = filing.url;
@@ -147,12 +139,10 @@ namespace StockScraperV3
                 bool isHtmlParsed = false;
                 bool isXbrlParsed = false;
                 int retries = 3;
-
                 for (int attempt = 0; attempt < retries; attempt++)
                 {
                     try
-                    {
-                        // XBRL Parsing
+                    {    // XBRL Parsing
                         var (xbrlUrl, isIxbrl) = await XBRL.XBRL.GetXbrlUrl(url);
                         if (!string.IsNullOrEmpty(xbrlUrl))
                         {
@@ -173,9 +163,7 @@ namespace StockScraperV3
                                     }
                                 },
                                 async (content, isAnnual, name, symbol) =>
-                                {
-                                    // This delegate can remain unused or can be used for fallback parsing if necessary
-                                    // For safety, you can leave it empty or log a message
+                                {                                    
                                     if (!isIxbrl)
                                     {
                                         await XBRL.XBRL.ParseInlineXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
@@ -200,22 +188,12 @@ namespace StockScraperV3
                         await Task.Delay(1000); // Optional: Add delay before retrying
                         continue;
                     }
-
                     try
-                    {
-                        // HTML Parsing
+                    {             // HTML Parsing
                         string? interactiveDataUrl = await URL.GetInteractiveDataUrl(url);
                         if (!string.IsNullOrEmpty(interactiveDataUrl))
                         {
-                            await HTML.HTML.ProcessInteractiveData(
-                                driver, // Ensure driver is passed correctly
-                                interactiveDataUrl,
-                                companyName,
-                                companySymbol,
-                                isAnnualReport,
-                                url,
-                                companyId,
-                                dataNonStatic);
+                            await HTML.HTML.ProcessInteractiveData(driver, interactiveDataUrl, companyName, companySymbol, isAnnualReport, url, companyId, dataNonStatic);
                             isHtmlParsed = true;
                         }
                     }
@@ -249,14 +227,10 @@ namespace StockScraperV3
                         await Task.Delay(1000); // Optional: Add delay before retrying
                         continue;
                     }
-
                     break; // Exit retry loop if successful
                 }
-            }
-
-            // After all filings have been processed, retrieve completed entries
+            }           // After all filings have been processed, retrieve completed entries
             var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(companyId);
-
             if (completedEntries.Count > 0)
             {
                 await dataNonStatic.SaveEntriesToDatabaseAsync(companyId, completedEntries);
@@ -266,28 +240,14 @@ namespace StockScraperV3
                 Console.WriteLine($"[INFO] No completed entries to save for {companyName} ({companySymbol}).");
             }
         }
-
-
-
-        private static async Task ProcessFilingAsync(
-     (string url, string description) filing,
-     (int companyId, string companyName, string symbol, int cik) localCompany,
-     ChromeDriverPool driverPool,
-     DataNonStatic dataNonStatic)
+        private static async Task ProcessFilingAsync((string url, string description) filing, (int companyId, string companyName, string symbol, int cik) localCompany, ChromeDriverPool driverPool, DataNonStatic dataNonStatic)
         {
             ChromeDriver driver = null;
             try
             {
                 driver = await driverPool.GetDriverAsync();
                 int companyId = localCompany.companyId;
-                await ProcessFilings(
-                    driver,
-                    new List<(string url, string description)> { filing },
-                    localCompany.companyName,
-                    localCompany.symbol,
-                    companyId,
-                    0,
-                    dataNonStatic); // Pass shared instance
+                await ProcessFilings(driver, new List<(string url, string description)> { filing }, localCompany.companyName, localCompany.symbol, companyId, 0, dataNonStatic); // Pass shared instance
             }
             catch (Exception ex)
             {
@@ -299,7 +259,6 @@ namespace StockScraperV3
                 driverPool.ReturnDriver(driver); // Return driver to the pool
             }
         }
-
         public static async Task<List<(string url, string description, DateTime filingDate)>> GetFilingUrlsForLast10Years(string companyCIK, string filingType)
         {
             string url = $"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={companyCIK}&type={filingType}&count=100&output=atom";
@@ -340,41 +299,28 @@ namespace StockScraperV3
         {
             var nasdaq100Companies = await GetNasdaq100CompaniesFromDatabase();
             var driverPool = new ChromeDriverPool(5); // Initialize pool with 5 drivers
-            var semaphore = new SemaphoreSlim(5); // Limit concurrency to match the driver pool size
-
-            // Initialize a shared DataNonStatic instance
-            var dataNonStatic = new DataNonStatic();
-
+            var semaphore = new SemaphoreSlim(5); // Limit concurrency to match the driver pool size            
+            var dataNonStatic = new DataNonStatic();// Initialize a shared DataNonStatic instance
             foreach (var company in nasdaq100Companies)
             {
                 var localCompany = company;
-                Console.WriteLine($"Starting processing for {localCompany.companyName} ({localCompany.symbol})");
-
-                // Fetch filings concurrently
-                var filingTasks = new[]
-                {
-            StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-K"),
-            StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-Q")
-        };
-
+                Console.WriteLine($"Starting processing for {localCompany.companyName} ({localCompany.symbol})");                
+                var filingTasks = new[]// Fetch filings concurrently
+                {StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-K"), StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-Q")};
                 var filingsResults = await Task.WhenAll(filingTasks);
                 var filings = filingsResults
                     .SelectMany(f => f)
                     .DistinctBy(f => f.url)
                     .Select(f => (f.url, f.description))
                     .ToList();
-
                 if (!filings.Any())
                 {
                     Console.WriteLine($"No filings found for {localCompany.companyName} ({localCompany.symbol})");
                     continue;
                 }
-
                 var chromeDriverTasks = new List<Task>();
-
                 foreach (var filing in filings)
-                {
-                    // Semaphore ensures only 5 tasks run concurrently
+                {     // Semaphore ensures only 5 tasks run concurrently
                     await semaphore.WaitAsync();
                     chromeDriverTasks.Add(Task.Run(async () =>
                     {
@@ -392,11 +338,8 @@ namespace StockScraperV3
                         }
                     }));
                 }
-
-                await Task.WhenAll(chromeDriverTasks);
-
-                // Save completed entries to the database
-                var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(localCompany.companyId);
+                await Task.WhenAll(chromeDriverTasks);                
+                var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(localCompany.companyId);// Save completed entries to the database
                 if (completedEntries.Count > 0)
                 {
                     try
@@ -411,9 +354,7 @@ namespace StockScraperV3
                 else
                 {
                     Console.WriteLine($"[INFO] No completed entries to save for {localCompany.companyName} ({localCompany.symbol}).");
-                }
-
-                // Handle Q4 calculations in a transactional manner
+                }  // Handle Q4 calculations in a transactional manner
                 using (SqlConnection connection = new SqlConnection(connectionString))
                 {
                     await connection.OpenAsync();
@@ -423,7 +364,6 @@ namespace StockScraperV3
                         {
                             await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic);
                             transaction.Commit();
-                            Console.WriteLine($"Transaction committed for {localCompany.companyName} ({localCompany.symbol}).");
                         }
                         catch (Exception ex)
                         {
@@ -440,14 +380,11 @@ namespace StockScraperV3
                         }
                     }
                 }
-
                 Console.WriteLine($"Finished processing for {localCompany.companyName} ({localCompany.symbol})");
             }
-
             driverPool.Dispose(); // Dispose of the driver pool after processing
             semaphore.Dispose(); // Dispose of the semaphore
         }
-
         public static async Task<int> GetCompanyIdBySymbol(string companySymbol)
         {
             int companyId = 0;

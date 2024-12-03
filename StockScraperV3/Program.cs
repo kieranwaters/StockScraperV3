@@ -5,15 +5,6 @@
 using DataElements;
 using OpenQA.Selenium.Chrome;
 using System.Data.SqlClient;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Xml.Linq;
-using StockScraperV3;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.IO;
 using Data;
 
 namespace Nasdaq100FinancialScraper
@@ -21,9 +12,7 @@ namespace Nasdaq100FinancialScraper
     public class Program
     {
         public static readonly string connectionString = "Server=DESKTOP-SI08RN8\\SQLEXPRESS;Database=StockDataScraperDatabase;Integrated Security=True;";
-
         public static readonly SemaphoreSlim semaphore = new SemaphoreSlim(5, 5); // Allow 5 concurrent ChromeDriver instances
-
         static async Task Main(string[] args)
         {
             try
@@ -39,20 +28,14 @@ namespace Nasdaq100FinancialScraper
                 Console.WriteLine("[INFO] Scraping completed.");
             }
         }
-
-        /// <summary>
-        /// Calculates the fiscal year based on the end date and quarter, consistent with the rest of the program.
-        /// </summary>
         public static int GetFiscalYear(DateTime endDate, int quarter, DateTime? fiscalYearEndDate = null)
         {
             if (quarter == 0 && fiscalYearEndDate.HasValue)
-            {
-                // For annual reports, fiscal year is the year of the adjusted fiscal year end date
+            {      // For annual reports, fiscal year is the year of the adjusted fiscal year end date
                 return fiscalYearEndDate.Value.Year;
             }
             else
-            {
-                // Existing logic for quarterly reports
+            {   // Existing logic for quarterly reports
                 switch (quarter)
                 {
                     case 1:
@@ -68,7 +51,6 @@ namespace Nasdaq100FinancialScraper
                 }
             }
         }
-
         private static SqlCommand CloneCommand(SqlCommand originalCommand)
         {
             SqlCommand clonedCommand = new SqlCommand
@@ -76,37 +58,12 @@ namespace Nasdaq100FinancialScraper
                 CommandText = originalCommand.CommandText,
                 CommandType = originalCommand.CommandType
             };
-
             foreach (SqlParameter param in originalCommand.Parameters)
             {
                 clonedCommand.Parameters.Add(((ICloneable)param).Clone());
             }
-
             return clonedCommand;
         }
-
-        public static string GetColumnName(string elementName)
-        {
-            // Check if the element is part of the InstantDateElements or ElementsOfInterest sets (XBRL parsing)
-            if (FinancialElementLists.InstantDateElements.Contains(elementName) || FinancialElementLists.ElementsOfInterest.Contains(elementName))
-            {
-                return elementName; // The element name itself is the column name in these cases
-            }
-
-            // Check if the element is part of HTMLElementsOfInterest (HTML parsing)
-            foreach (var kvp in FinancialElementLists.HTMLElementsOfInterest)
-            {
-                // Check if the elementName matches any string in the key list
-                if (kvp.Key.Contains(elementName))
-                {
-                    return kvp.Value.ColumnName; // Get the corresponding column name
-                }
-            }
-
-            // Return empty string if no match is found
-            return string.Empty;
-        }
-
         public static async Task StoreCompanyDataInDatabase(List<Data.Data.CompanyInfo> companies)
         {
             using (SqlConnection connection = new SqlConnection(connectionString))
@@ -123,7 +80,6 @@ namespace Nasdaq100FinancialScraper
                                 INSERT INTO CompaniesList (CompanyName, CompanySymbol, CIK) 
                                 VALUES (@CompanyName, @CompanySymbol, @CIK);
                             END";
-
                         command.Parameters.AddWithValue("@CompanyName", company.CompanyName);
                         command.Parameters.AddWithValue("@CompanySymbol", company.Ticker);
                         if (int.TryParse(company.CIK, out int cikValue))
@@ -134,7 +90,6 @@ namespace Nasdaq100FinancialScraper
                         {
                             continue; // Skip this record if CIK is not valid
                         }
-
                         await command.ExecuteNonQueryAsync();
                     }
                 }
@@ -142,80 +97,48 @@ namespace Nasdaq100FinancialScraper
         }
 
         public static async Task<string> ScrapeReportsForCompany(string companySymbol)
-        {
-            
-                // Initialize local batched commands (if necessary)
-                var localBatchedCommands = new List<SqlCommand>();
-
-                // Retrieve Company CIK (Central Index Key)
-                var companyCIK = await StockScraperV3.URL.GetCompanyCIK(companySymbol);
-                if (string.IsNullOrEmpty(companyCIK))
+        {        
+                
+            var localBatchedCommands = new List<SqlCommand>();// Initialize local batched commands (if necessary)                                                                  
+            var companyCIK = await StockScraperV3.URL.GetCompanyCIK(companySymbol);// Retrieve Company CIK (Central Index Key)
+            if (string.IsNullOrEmpty(companyCIK))
                 {
                     return $"Error: Unable to retrieve CIK for company symbol {companySymbol}.";
-                }
-
-                // Retrieve filing URLs for the last 10 years for both 10-K and 10-Q reports
+                }             // Retrieve filing URLs for the last 10 years for both 10-K and 10-Q reports
                 var filingUrls10K = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-K");
-                var filingUrls10Q = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-Q");
-
-                // Combine both lists
-                var combinedFilingUrls = filingUrls10K.Concat(filingUrls10Q).ToList();
-
-                if (!combinedFilingUrls.Any())
+                var filingUrls10Q = await StockScraperV3.URL.GetFilingUrlsForLast10Years(companyCIK, "10-Q");                
+                var combinedFilingUrls = filingUrls10K.Concat(filingUrls10Q).ToList();// Combine both lists
+            if (!combinedFilingUrls.Any())
                 {
                     return $"No filings found for {companySymbol}";
-                }
-
-                // Prepare filings to process without filingType
+                }    // Prepare filings to process without filingType
                 var filingsToProcess = combinedFilingUrls
                     .Select(f => (f.url, f.description))
-                    .ToList(); // List<(string url, string description)>
-
-                // Initialize a single ChromeDriver instance
-                ChromeDriver driver = null;
+                    .ToList(); // List<(string url, string description)>                
+                ChromeDriver driver = null;// Initialize a single ChromeDriver instance
 
                 try
-                {
-                    // Initialize ChromeDriver session
-                    driver = StockScraperV3.URL.StartNewSession();
-
-                    // Retrieve company ID
-                    int companyId = await StockScraperV3.URL.GetCompanyIdBySymbol(companySymbol);
-                    if (companyId == 0)
+                {   // Initialize ChromeDriver session
+                    driver = StockScraperV3.URL.StartNewSession();                    
+                    int companyId = await StockScraperV3.URL.GetCompanyIdBySymbol(companySymbol);// Retrieve company ID
+                if (companyId == 0)
                     {
                         return $"Error: Unable to retrieve Company ID for {companySymbol}.";
-                    }
-
-                    // Retrieve company name within the database transaction
+                    }             // Retrieve company name within the database transaction
                     using (SqlConnection connection = new SqlConnection(connectionString))
                     {
                         await connection.OpenAsync();
                         using (SqlTransaction transaction = connection.BeginTransaction())
                         {
                             try
-                            {
-                                // Implement the missing method GetCompanyNameBySymbol
-                                string companyName = await GetCompanyNameBySymbol(companySymbol, connection, transaction);
-
-                                // Create a shared DataNonStatic instance
-                                var dataNonStatic = new DataNonStatic();
-
-                                // Define the missing int parameter
-                                int someIntParameter = 0; // Assign appropriately based on your method's logic
+                            {            // Implement the missing method GetCompanyNameBySymbol
+                                string companyName = await GetCompanyNameBySymbol(companySymbol, connection, transaction);                                
+                                var dataNonStatic = new DataNonStatic();// Create a shared DataNonStatic instance
+                            int someIntParameter = 0; // Assign appropriately based on your method's logic
 
                                 // Process Filings within the transaction
-                                await StockScraperV3.URL.ProcessFilings(
-                                    driver,
-                                    filingsToProcess,   // Correctly typed variable
-                                    companyName,
-                                    companySymbol,
-                                    companyId,
-                                    someIntParameter,   // Provide the missing int parameter
-                                    dataNonStatic);     // Pass the shared DataNonStatic instance
-
-                                // After all filings have been processed and data merged in dataNonStatic
+                                await StockScraperV3.URL.ProcessFilings(driver, filingsToProcess, companyName, companySymbol, companyId, someIntParameter, dataNonStatic);     
                                 var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(companyId); // Corrected to async method
-
                                 if (completedEntries.Count > 0) // No need for Count() if List<T>
                                 {
                                     await dataNonStatic.SaveEntriesToDatabaseAsync(companyId, completedEntries);
@@ -224,22 +147,16 @@ namespace Nasdaq100FinancialScraper
                                 else
                                 {
                                     Console.WriteLine($"[INFO] No completed entries to save for {companyName} ({companySymbol}).");
-                                }
-
-                                // Execute any batched SQL commands within the transaction (if necessary)
-                                if (localBatchedCommands.Any())
-                                {
+                                }         
+                                if (localBatchedCommands.Any())// Execute any batched SQL commands within the transaction (if necessary)
+                            {
                                     await Data.Data.ExecuteBatch(localBatchedCommands, connectionString);
                                 }
-
-                                // Commit the transaction if all operations succeed
                                 transaction.Commit();
-                                Console.WriteLine($"Transaction committed successfully for {companyName} ({companySymbol}).");
                             }
                             catch (Exception ex)
                             {
                                 Console.WriteLine($"[ERROR] Transaction failed for {companySymbol}: {ex.Message}");
-                                // Rollback the transaction on error
                                 try
                                 {
                                     transaction.Rollback();
@@ -255,31 +172,17 @@ namespace Nasdaq100FinancialScraper
                     }
                 }
                 catch (Exception ex)
-                {
-                    // Handle exceptions related to ChromeDriver and processing
+                {          // Handle exceptions related to ChromeDriver and processing
                     Console.WriteLine($"[ERROR] Failed to process filings for {companySymbol}: {ex.Message}");
                     throw;
                 }
                 finally
                 {
-                    // Ensure the ChromeDriver is properly closed
-                    driver?.Quit();
+                      driver?.Quit();
                 }
-
                 int filingCount = filingsToProcess.Count;
-                return $"Successfully scraped {filingCount} filings for {companySymbol}";
-            
-}
-
-
-        /// <summary>
-        /// Retrieves the company name based on the company symbol.
-        /// </summary>
-        /// <param name="companySymbol">The stock symbol of the company.</param>
-        /// <param name="connection">An open SQL connection.</param>
-        /// <param name="transaction">The current SQL transaction.</param>
-        /// <returns>The name of the company.</returns>
-        /// <exception cref="Exception">Thrown if the company name cannot be found.</exception>
+                return $"Successfully scraped {filingCount} filings for {companySymbol}";            
+        }
         private static async Task<string> GetCompanyNameBySymbol(string companySymbol, SqlConnection connection, SqlTransaction transaction)
         {
             string query = "SELECT CompanyName FROM Companies WHERE CompanySymbol = @CompanySymbol";
@@ -297,55 +200,27 @@ namespace Nasdaq100FinancialScraper
                 }
             }
         }
-
-
-        private static async Task UpdateFinancialYear(int companyId, int year, int quarter, int financialYear, SqlConnection connection)
-        {
-            string updateQuery = @"
-                UPDATE FinancialData
-                SET FinancialYear = @FinancialYear
-                WHERE CompanyID = @CompanyID AND Year = @Year AND Quarter = @Quarter";
-
-            using (SqlCommand command = new SqlCommand(updateQuery, connection))
-            {
-                command.Parameters.AddWithValue("@FinancialYear", financialYear);
-                command.Parameters.AddWithValue("@CompanyID", companyId);
-                command.Parameters.AddWithValue("@Year", year);
-                command.Parameters.AddWithValue("@Quarter", quarter);
-
-                await command.ExecuteNonQueryAsync();
-            }
-        }
-
         private static async Task ScrapeAndProcessDataAsync()
         {
             try
             {
                 var companies = await StockScraperV3.URL.GetNasdaq100CompaniesFromDatabase();
                 var tasks = new List<Task>();
-
-                // Initialize a shared DataNonStatic instance
                 var dataNonStatic = new DataNonStatic();
-
                 foreach (var company in companies)
                 {
                     await semaphore.WaitAsync(); // Wait until a slot is available
                     try
-                    {
-                        // Run scraper for each company
+                    {        // Run scraper for each company
                         await StockScraperV3.URL.RunScraperAsync();
-
                         using (SqlConnection connection = new SqlConnection(connectionString))
                         {
                             await connection.OpenAsync();
-
                             using (SqlTransaction transaction = connection.BeginTransaction())
                             {
                                 try
-                                {
-                                    // Use company.companyId to call CalculateAndSaveQ4InDatabase for the current company
+                                {   // Use company.companyId to call CalculateAndSaveQ4InDatabase for the current company
                                     Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, company.companyId, dataNonStatic);
-
                                     transaction.Commit(); // Commit the transaction if successful
                                 }
                                 catch (Exception ex)
