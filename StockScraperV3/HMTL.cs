@@ -218,12 +218,14 @@ namespace HTML
                     // Step 3: Determine Fiscal Year and Quarter
                     int fiscalYear;
                     int quarter;
+                    DateTime fiscalYearEndDateFinal;
 
                     if (isAnnualReport)
                     {
                         // **For Annual Reports:** Set quarter to 0 and fiscal year based on fiscalYearEndDate
                         quarter = 0;
                         fiscalYear = adjustedFiscalYearEndDate.Year;
+                        fiscalYearEndDateFinal = adjustedFiscalYearEndDate;
                         Console.WriteLine($"[DEBUG] Set Fiscal Year to {fiscalYear} and Quarter to {quarter} for Annual Report for CompanyID: {companyId}");
                     }
                     else
@@ -232,31 +234,70 @@ namespace HTML
                         (int determinedFiscalYear, int determinedQuarter, DateTime determinedFiscalYearEndDate) = await Data.Data.DetermineFiscalYearAndQuarterAsync(companyId, adjustedFiscalYearEndDate, dataNonStatic);
                         fiscalYear = determinedFiscalYear;
                         quarter = determinedQuarter;
+                        fiscalYearEndDateFinal = determinedFiscalYearEndDate;
                         Console.WriteLine($"[DEBUG] Determined Fiscal Year: {fiscalYear}, Quarter: {quarter} for Quarterly Report for CompanyID: {companyId}");
                     }
 
-                    // Step 4: Get standardized period dates based on fiscal year and quarter
-                    (DateTime standardStartDate, DateTime standardEndDate) = Data.Data.GetStandardPeriodDates(
-                        fiscalYear,
-                        quarter,
-                        adjustedFiscalYearEndDate);
-                    Console.WriteLine($"[DEBUG] Standard period dates: Start - {standardStartDate.ToShortDateString()}, End - {standardEndDate.ToShortDateString()} for {companyName} ({companySymbol})");
+                    // Step 4: Calculate Report Start and End Dates Based on Fiscal Year and Quarter
+                    DateTime reportStartDate;
+                    DateTime reportEndDate;
 
-                    // Step 5: Initialize the FinancialDataEntry with standardized dates
+                    if (isAnnualReport)
+                    {
+                        // **For Annual Reports:**
+                        reportEndDate = fiscalYearEndDateFinal;
+                        reportStartDate = reportEndDate.AddYears(-1).AddDays(1);
+                        Console.WriteLine($"[DEBUG] Annual Report's Period Start Date: {reportStartDate.ToShortDateString()}");
+                        Console.WriteLine($"[DEBUG] Annual Report's Period End Date: {reportEndDate.ToShortDateString()}");
+                    }
+                    else
+                    {
+                        // **For Quarterly Reports:**
+                        DateTime fiscalYearStartDate = fiscalYearEndDateFinal.AddYears(-1).AddDays(1).Date;
+                        DateTime periodStart, periodEnd;
+
+                        switch (quarter)
+                        {
+                            case 1:
+                                periodStart = fiscalYearStartDate;
+                                periodEnd = fiscalYearStartDate.AddMonths(3).AddDays(-1);
+                                break;
+                            case 2:
+                                periodStart = fiscalYearStartDate.AddMonths(3);
+                                periodEnd = fiscalYearStartDate.AddMonths(6).AddDays(-1);
+                                break;
+                            case 3:
+                                periodStart = fiscalYearStartDate.AddMonths(6);
+                                periodEnd = fiscalYearStartDate.AddMonths(9).AddDays(-1);
+                                break;
+                            case 4:
+                                periodStart = fiscalYearStartDate.AddMonths(9);
+                                periodEnd = fiscalYearEndDateFinal;
+                                break;
+                            default:
+                                throw new ArgumentException("Invalid quarter value", nameof(quarter));
+                        }
+
+                        reportStartDate = periodStart;
+                        reportEndDate = periodEnd;
+
+                        Console.WriteLine($"[DEBUG] Quarterly Report's Period Start Date: {reportStartDate.ToShortDateString()}");
+                        Console.WriteLine($"[DEBUG] Quarterly Report's Period End Date: {reportEndDate.ToShortDateString()}");
+                    }
+
+                    // Step 5: Initialize FinancialDataEntry with Report Dates
                     var parsedData = new FinancialDataEntry
                     {
                         CompanyID = companyId,
-                        StartDate = standardStartDate,
-                        EndDate = standardEndDate,
+                        StartDate = reportStartDate,               // Actual Period Start Date
+                        EndDate = reportEndDate,                   // Actual Period End Date
                         Quarter = quarter,
                         Year = fiscalYear,
                         IsHtmlParsed = true,  // Set to true for HTML parsing
                         IsXbrlParsed = false, // Set to false for HTML parsing
                         FinancialValues = new Dictionary<string, object>(),
                         FinancialValueTypes = new Dictionary<string, Type>(),
-                        StandardStartDate = standardStartDate,      // Set StandardStartDate
-                        StandardEndDate = standardEndDate,          // Set StandardEndDate
-                        FiscalYearEndDate = adjustedFiscalYearEndDate // Set FiscalYearEndDate
+                        FiscalYearEndDate = fiscalYearEndDateFinal // Fiscal Year End Date
                     };
 
                     // Step 6: Extract Scaling Factors
@@ -295,7 +336,9 @@ namespace HTML
                         }
                     }
 
-                    // **Set Quarter and Year if Annual Report**
+                    Console.WriteLine($"[DEBUG] FinancialDataEntry populated with {parsedData.FinancialValues.Count} financial values.");
+
+                    // Step 8: Set Year and Quarter Explicitly
                     if (isAnnualReport)
                     {
                         parsedData.Quarter = 0;
@@ -304,14 +347,13 @@ namespace HTML
                     }
                     else
                     {
-                        int year =  fiscalYearEndDate.Value.Year ; // Assign a default value or handle accordingly
-                                                                                                  // Set Year to the year of FiscalYearEndDate
+                        // For quarterly reports, Year is already set via DetermineFiscalYearAndQuarterAsync
                         Console.WriteLine($"[DEBUG] Set Year to {parsedData.Year} for Quarterly Report for CompanyID: {companyId}");
                     }
 
-                    // Step 8: Add the fully populated FinancialDataEntry to dataNonStatic
+                    // Step 9: Add the fully populated FinancialDataEntry to dataNonStatic
                     await dataNonStatic.AddParsedDataAsync(companyId, parsedData);
-                   
+                    Console.WriteLine($"[INFO] Added FinancialDataEntry for CompanyID: {companyId}, FiscalYear: {fiscalYear}, Quarter: {quarter}");
                 }
             }
             catch (Exception ex)
