@@ -136,7 +136,7 @@ namespace StockScraperV3
         {
             int parsedReportsCount = 0;
             int totalReportsToParse = filings.Count(filing => filing.description.Contains("10-K") || filing.description.Contains("10-Q"));
-            const int leewayDays = 15;
+            const int leewayDays = 0;
 
             foreach (var filing in filings) // Process each filing
             {
