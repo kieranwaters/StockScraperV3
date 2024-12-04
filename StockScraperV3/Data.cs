@@ -3,6 +3,8 @@ using Newtonsoft.Json;
 using System.Collections.Concurrent;
 using System.Data;
 using System.Text.RegularExpressions;
+using OpenQA.Selenium;
+using OfficeOpenXml.Drawing;
 
 namespace Data
 {
@@ -271,92 +273,111 @@ WHERE CompanyID = @CompanyID";
     }
     public static class Data
     {
-        public static async Task<(int fiscalYear, int quarter, DateTime fiscalYearEndDate)> DetermineFiscalYearAndQuarterAsync(
+       public static async Task<(int fiscalYear, int quarter, DateTime fiscalYearEndDate)> DetermineFiscalYearAndQuarterAsync(
     int companyId,
     DateTime reportEndDate,
     DataNonStatic dataNonStatic)
+{
+    try
+    {
+        // Step 1: Load company financial data
+        var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
+        if (companyData == null)
         {
-            try
-            {
-                // Step 1: Load company financial data
-                var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
-                if (companyData == null)
-                {
-                    throw new Exception($"Failed to load CompanyData for CompanyID: {companyId}.");
-                }
-
-                // Step 2: Extract all annual reports (Quarter = 0)
-                var annualReports = companyData.FinancialEntries.Values
-                    .Where(entry => entry.Quarter == 0)
-                    .OrderByDescending(entry => entry.EndDate)
-                    .ToList();
-
-                if (annualReports == null || annualReports.Count == 0)
-                {
-                    throw new Exception($"No annual reports found for CompanyID: {companyId}.");
-                }
-
-                // Step 3: Find the most recent annual report before the quarterly report
-                var relevantAnnualReport = annualReports
-                    .Where(report => report.EndDate.Date <= reportEndDate.Date)
-                    .OrderByDescending(report => report.EndDate)
-                    .FirstOrDefault();
-
-                if (relevantAnnualReport == null)
-                {
-                    // Handle if no annual report is before the quarterly report
-                    relevantAnnualReport = annualReports.Last(); // Use the latest annual report
-                    Console.WriteLine($"[INFO] No annual report before quarterly report. Using FiscalYearEndDate: {relevantAnnualReport.EndDate.ToShortDateString()}");
-                }
-
-                // Step 4: Calculate Fiscal Year Start and End Dates
-                DateTime fiscalYearEndDate = relevantAnnualReport.EndDate.Date;
-                DateTime fiscalYearStartDate = fiscalYearEndDate.AddYears(-1).AddDays(1).Date;
-
-                // Step 5: Declare Fiscal Year Number before using it
-                int fiscalYear = fiscalYearEndDate.Year;
-
-                // Step 6: Validate that reportEndDate falls within the fiscal year
-                if (reportEndDate.Date < fiscalYearStartDate || reportEndDate.Date > fiscalYearEndDate)
-                {
-                    Console.WriteLine($"[WARNING] Report End Date {reportEndDate.ToShortDateString()} is outside the Fiscal Year {fiscalYearStartDate.ToShortDateString()} - {fiscalYearEndDate.ToShortDateString()} for CompanyID: {companyId}.");
-                    // Adjust the fiscal year to the next year
-                    fiscalYearStartDate = fiscalYearEndDate.AddDays(1).Date;
-                    fiscalYearEndDate = fiscalYearStartDate.AddYears(1).AddDays(-1).Date;
-                    fiscalYear = fiscalYearEndDate.Year; // Reassign fiscalYear after adjustment
-                }
-
-                // Step 7: Calculate the number of months between fiscalYearStartDate and reportEndDate
-                int monthsDifference = ((reportEndDate.Year - fiscalYearStartDate.Year) * 12) + reportEndDate.Month - fiscalYearStartDate.Month;
-
-                // Step 8: Determine the Quarter based on monthsDifference
-                int determinedQuarter = (monthsDifference / 3) + 1;
-
-                // Step 9: Adjust the Quarter to be within 1 to 4
-                while (determinedQuarter > 4)
-                {
-                    determinedQuarter -= 4;
-                }
-
-                while (determinedQuarter < 1)
-                {
-                    determinedQuarter += 4;
-                }
-                // Step 10: Ensure that the determinedQuarter is within 1 to 4
-                if (determinedQuarter < 1 || determinedQuarter > 4)
-                {
-                    throw new Exception($"Calculated quarter {determinedQuarter} is out of range for CompanyID: {companyId}.");
-                }
-
-                // Step 12: Return the tuple with 3 elements
-                return (fiscalYear, determinedQuarter, fiscalYearEndDate);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERROR] Exception in DetermineFiscalYearAndQuarterAsync: {ex.Message}");
-                throw; // Re-throw the exception after logging
-            }
+            throw new Exception($"Failed to load CompanyData for CompanyID: {companyId}.");
         }
+
+        // Step 2: Extract all annual reports (Quarter = 0)
+        var annualReports = companyData.FinancialEntries.Values
+            .Where(entry => entry.Quarter == 0)
+            .OrderByDescending(entry => entry.EndDate)
+            .ToList();
+
+        if (annualReports == null || annualReports.Count == 0)
+        {
+            throw new Exception($"No annual reports found for CompanyID: {companyId}.");
+        }
+
+        // Step 3: Find the most recent annual report before the quarterly report
+        var relevantAnnualReport = annualReports
+            .Where(report => report.EndDate.Date <= reportEndDate.Date)
+            .OrderByDescending(report => report.EndDate)
+            .FirstOrDefault();
+
+        if (relevantAnnualReport == null)
+        {
+            // Handle if no annual report is before the quarterly report
+            relevantAnnualReport = annualReports.Last(); // Use the earliest annual report
+            Console.WriteLine($"[INFO] No annual report before quarterly report. Using FiscalYearEndDate: {relevantAnnualReport.EndDate.ToShortDateString()}");
+        }
+
+        // Step 4: Calculate Fiscal Year Start and End Dates
+        DateTime fiscalYearEndDate = relevantAnnualReport.EndDate.Date;
+        DateTime fiscalYearStartDate = fiscalYearEndDate.AddYears(-1).AddDays(1).Date;
+
+        // Step 5: Declare Fiscal Year Number before using it
+        int fiscalYear = fiscalYearEndDate.Year;
+
+        // Step 6: Validate that reportEndDate falls within the fiscal year
+        if (reportEndDate.Date < fiscalYearStartDate || reportEndDate.Date > fiscalYearEndDate)
+        {
+            Console.WriteLine($"[WARNING] Report End Date {reportEndDate.ToShortDateString()} is outside the Fiscal Year {fiscalYearStartDate.ToShortDateString()} - {fiscalYearEndDate.ToShortDateString()} for CompanyID: {companyId}.");
+            // Adjust the fiscal year to the next year
+            fiscalYearStartDate = fiscalYearEndDate.AddDays(1).Date;
+            fiscalYearEndDate = fiscalYearStartDate.AddYears(1).AddDays(-1).Date;
+            fiscalYear = fiscalYearEndDate.Year; // Reassign fiscalYear after adjustment
+        }
+
+        // Step 7: Calculate the number of months between fiscalYearStartDate and reportEndDate
+        int monthsDifference = ((reportEndDate.Year - fiscalYearStartDate.Year) * 12) + reportEndDate.Month - fiscalYearStartDate.Month;
+        int determinedQuarter = 1; // Default value
+
+        // Step 8: Determine the Quarter based on monthsDifference
+        float rawdifference = monthsDifference / 3f; // Use float division
+
+        if (monthsDifference > 1 && monthsDifference < 4.5f)
+        {
+            determinedQuarter = 1;
+        }
+        else if (monthsDifference > 4.5f && monthsDifference < 5.5f)
+        {
+            determinedQuarter = 2;
+        }
+        else if (monthsDifference > 5.5f && monthsDifference < 7.5f)
+        {
+            determinedQuarter = 3;
+        }
+        else
+        {
+            determinedQuarter = 4;
+        }
+
+        // Step 9: Adjust the Quarter to be within 1 to 4
+        while (determinedQuarter > 4)
+        {
+            determinedQuarter -= 4;
+        }
+
+        while (determinedQuarter < 1)
+        {
+            determinedQuarter += 4;
+        }
+
+        // Step 10: Ensure that the determinedQuarter is within 1 to 4
+        if (determinedQuarter < 1 || determinedQuarter > 4)
+        {
+            throw new Exception($"Calculated quarter {determinedQuarter} is out of range for CompanyID: {companyId}.");
+        }
+
+        // Step 12: Return the tuple with 3 elements
+        return (fiscalYear, determinedQuarter, fiscalYearEndDate);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Exception in DetermineFiscalYearAndQuarterAsync: {ex.Message}");
+        throw; // Re-throw the exception after logging
+    }
+}
 
         public static DateTime AdjustToNearestQuarterEndDate(DateTime fiscalYearEndDate)
         {
