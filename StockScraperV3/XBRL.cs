@@ -140,13 +140,10 @@ namespace XBRL
                     Console.WriteLine("[DEBUG] No contexts found in Inline XBRL.");
                     return elements;
                 }
-
-                Console.WriteLine("[DEBUG] Listing all contexts and their endDates:");
                 foreach (var ctx in contexts.Values)
                 {
                     var endDateElement = ctx.Descendants(xbrli + "endDate").FirstOrDefault();
                     string endDateStr = endDateElement != null ? endDateElement.Value : "No endDate";
-                    Console.WriteLine($"[DEBUG] Context ID: {ctx.Attribute("id")?.Value}, endDate: {endDateStr}");
                 }
 
                 // Extract financial elements linked to contexts
@@ -323,14 +320,7 @@ namespace XBRL
                                 parsedData.FinancialValueTypes[element.NormalisedName] = typeof(decimal);
                             }
                         }
-                        else
-                        {
-                            Console.WriteLine($"[WARNING] Unable to parse value '{element.Value}' for element '{element.RawName}'.");
-                        }
                     }
-
-                    Console.WriteLine($"[DEBUG] FinancialDataEntry populated with {parsedData.FinancialValues.Count} financial values.");
-
                     if (isAnnualReport)
                     {
                         parsedData.Quarter = 0;
@@ -574,10 +564,6 @@ namespace XBRL
                                 parsedData.FinancialValues[element.NormalisedName] = decimalValue;
                                 parsedData.FinancialValueTypes[element.NormalisedName] = typeof(decimal);
                             }
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[WARNING] Unable to parse value '{element.Value}' for element '{element.RawName}'.");
                         }
                     }
 
