@@ -339,11 +339,11 @@ WHERE CompanyID = @CompanyID";
         {
             determinedQuarter = 1;
         }
-        else if (monthsDifference > 4.5f && monthsDifference < 5.5f)
+        else if (monthsDifference > 4.5f && monthsDifference < 7.5f)
         {
             determinedQuarter = 2;
         }
-        else if (monthsDifference > 5.5f && monthsDifference < 7.5f)
+        else if (monthsDifference > 7.5f && monthsDifference < 10.5f)
         {
             determinedQuarter = 3;
         }
