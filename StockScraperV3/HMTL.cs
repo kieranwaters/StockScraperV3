@@ -336,7 +336,7 @@ namespace HTML
                     DateTime? fiscalYearEndDate = ExtractDateFromThTags(table); // Extract fiscal year end date from the table headers
                     if (!fiscalYearEndDate.HasValue)
                     {
-                        Console.WriteLine($"[ERROR] Could not extract the fiscal year end date for {companyName} ({companySymbol}).");
+ 
                         continue;
                     }
 
@@ -356,7 +356,7 @@ namespace HTML
                         quarter = 0;
                         fiscalYear = adjustedFiscalYearEndDate.Year;
                         fiscalYearEndDateFinal = adjustedFiscalYearEndDate;
-                        Console.WriteLine($"[DEBUG] Set Fiscal Year to {fiscalYear} and Quarter to {quarter} for Annual Report for CompanyID: {companyId}");
+                        
                     }
                     else
                     {
@@ -377,8 +377,6 @@ namespace HTML
                         // **For Annual Reports:**
                         reportEndDate = fiscalYearEndDateFinal;
                         reportStartDate = reportEndDate.AddYears(-1).AddDays(1);
-                        Console.WriteLine($"[DEBUG] Annual Report's Period Start Date: {reportStartDate.ToShortDateString()}");
-                        Console.WriteLine($"[DEBUG] Annual Report's Period End Date: {reportEndDate.ToShortDateString()}");
                     }
                     else
                     {
@@ -660,8 +658,6 @@ namespace HTML
             {
                 return mostRecentDate;
             }
-
-            Console.WriteLine($"[ERROR] No valid date could be extracted from <th> elements.");
             return null;
         }
         // Helper method to validate date formats using regex

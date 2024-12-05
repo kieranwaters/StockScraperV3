@@ -137,6 +137,46 @@ namespace Data
     {
         public ConcurrentDictionary<int, CompanyFinancialData> companyFinancialDataCache = new ConcurrentDictionary<int, CompanyFinancialData>();
         private const string connectionString = "Server=DESKTOP-SI08RN8\\SQLEXPRESS;Database=StockDataScraperDatabase;Integrated Security=True;";
+        public async Task SaveAllEntriesToDatabaseAsync(int companyId)
+        {
+            var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
+            var entriesToSave = companyData.GetCompletedEntries();
+
+            if (!entriesToSave.Any())
+            {
+                Console.WriteLine($"[INFO] No entries to save for CompanyID: {companyId}.");
+                return;
+            }
+
+            using (SqlConnection connection = new SqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                using (SqlTransaction transaction = connection.BeginTransaction())
+                {
+                    try
+                    {
+                        await Data.SaveCompleteEntryToDatabaseAsync(entriesToSave, connection, transaction);
+                        transaction.Commit();
+                        Console.WriteLine($"[INFO] Successfully saved all entries for CompanyID: {companyId}.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ERROR] Transaction failed while saving entries: {ex.Message}");
+                        try
+                        {
+                            transaction.Rollback();
+                            Console.WriteLine("[INFO] Transaction rolled back.");
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            Console.WriteLine($"[ERROR] Transaction rollback failed: {rollbackEx.Message}");
+                        }
+                        throw;
+                    }
+                }
+            }
+        }
+
         public async Task<CompanyFinancialData> GetOrLoadCompanyFinancialDataAsync(int companyId)
         { // Attempt to get the company's data from the cache
             if (companyFinancialDataCache.TryGetValue(companyId, out var companyData))
@@ -177,7 +217,7 @@ namespace Data
                         try
                         {    // Define leeway (e.g., 5 days)
                             TimeSpan leeway = TimeSpan.FromDays(15);
-                            await Data.SaveCompleteEntryToDatabase(mergedEntries, connection, transaction);
+                            await Data.SaveCompleteEntryToDatabaseAsync(mergedEntries, connection, transaction);
                             transaction.Commit();
                         }
                         catch (Exception ex)
@@ -202,6 +242,7 @@ namespace Data
                 Console.WriteLine($"[ERROR] Failed to save entries to database: {ex.Message}");
             }
         }
+
         private async Task<List<FinancialDataEntry>> LoadFinancialDataFromDatabaseAsync(int companyId)
         {
             var entries = new List<FinancialDataEntry>();
@@ -244,16 +285,36 @@ WHERE CompanyID = @CompanyID";
             var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
             return companyData.GetCompletedEntries();
         }
-        public async Task AddParsedDataAsync(int companyId, FinancialDataEntry parsedData)
+        public Task AddParsedDataAsync(int companyId, FinancialDataEntry parsedData)
         {
-            var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
-            companyData.AddOrUpdateEntry(parsedData);// Optionally, save to the database immediately or batch the updates
-            await SaveEntriesToDatabaseAsync(companyId, new List<FinancialDataEntry> { parsedData });
+            if (!companyFinancialDataCache.TryGetValue(companyId, out var companyData))
+            {
+                // If not in cache, create a new CompanyFinancialData
+                companyData = new CompanyFinancialData(companyId);
+                companyFinancialDataCache[companyId] = companyData;
+            }
+            companyData.AddOrUpdateEntry(parsedData); // Add to cache
+            return Task.CompletedTask;
         }
+
+
+        public CompanyFinancialData GetOrCreateCompanyFinancialData(int companyId)
+        {
+            if (!companyFinancialDataCache.TryGetValue(companyId, out var companyData))
+            {
+                companyData = new CompanyFinancialData(companyId);
+                companyFinancialDataCache[companyId] = companyData;
+            }
+            return companyData;
+        }
+
+
         private ConcurrentDictionary<string, FinancialDataEntry> financialDataCache = new ConcurrentDictionary<string, FinancialDataEntry>();
     }
     public static class Data
     {
+
+
        public static async Task<(int fiscalYear, int quarter, DateTime fiscalYearEndDate)> DetermineFiscalYearAndQuarterAsync(int companyId, DateTime reportEndDate, DataNonStatic dataNonStatic)
     {
         try
@@ -571,6 +632,21 @@ WHERE CompanyID = @CompanyID
                 }
             }
         }
+        private static List<string> GetAllFinancialElementsFromEntries(List<FinancialDataEntry> financialEntries, int year)
+        {
+            var elementNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var entriesForYear = financialEntries.Where(entry => entry.Year == year);
+            foreach (var entry in entriesForYear)
+            {
+                foreach (var key in entry.FinancialValues.Keys)
+                {
+                    elementNames.Add(key);
+                }
+            }
+
+            return elementNames.ToList();
+        }
 
 
         private static async Task<List<string>> GetAllFinancialElementsAsync(
@@ -606,14 +682,23 @@ WHERE CompanyID = @CompanyID AND YEAR(EndDate) = @Year";
             return elementNames.ToList();
         }
         private static async Task ProcessAllFinancialElementsAsync(
-            SqlConnection connection,
-            SqlTransaction transaction,
-            int companyId,
-            int year,
-            Dictionary<string, object> q4Values,
-            List<string> elementNames)
+     int companyId,
+     int year,
+     Dictionary<string, object> q4Values,
+     List<string> elementNames,
+     List<FinancialDataEntry> financialEntries)
         {
-            foreach (var elementName in elementNames)
+            // Group financial entries by Quarter for quick access
+            var entriesByQuarter = financialEntries
+                .Where(entry => entry.Year == year)
+                .GroupBy(entry => entry.Quarter)
+                .ToDictionary(g => g.Key, g => g.FirstOrDefault());
+
+            // Use a thread-safe dictionary to store Q4 values when processing in parallel
+            var q4ValuesConcurrent = new ConcurrentDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+            // Parallelize the processing of financial elements
+            Parallel.ForEach(elementNames, elementName =>
             {
                 // Adjust the element name for annual value retrieval
                 string annualElementName = AdjustElementNameForAnnual(elementName);
@@ -621,11 +706,11 @@ WHERE CompanyID = @CompanyID AND YEAR(EndDate) = @Year";
                 string q2ElementName = AdjustElementNameForQuarter(elementName, 2);
                 string q3ElementName = AdjustElementNameForQuarter(elementName, 3);
 
-                // Retrieve financial values using the adjusted element names asynchronously
-                decimal? annualValue = await GetFinancialValueAsync(connection, transaction, companyId, year, 0, annualElementName);
-                decimal? q1Value = await GetNullableFinancialValueAsync(connection, transaction, companyId, year, 1, q1ElementName);
-                decimal? q2Value = await GetNullableFinancialValueAsync(connection, transaction, companyId, year, 2, q2ElementName);
-                decimal? q3Value = await GetNullableFinancialValueAsync(connection, transaction, companyId, year, 3, q3ElementName);
+                // Retrieve financial values from in-memory data
+                decimal? annualValue = GetFinancialValueFromEntries(entriesByQuarter, 0, annualElementName);
+                decimal? q1Value = GetFinancialValueFromEntries(entriesByQuarter, 1, q1ElementName);
+                decimal? q2Value = GetFinancialValueFromEntries(entriesByQuarter, 2, q2ElementName);
+                decimal? q3Value = GetFinancialValueFromEntries(entriesByQuarter, 3, q3ElementName);
 
                 decimal? q4Value;
                 if (annualValue.HasValue)
@@ -636,32 +721,27 @@ WHERE CompanyID = @CompanyID AND YEAR(EndDate) = @Year";
 
                     if (isBalanceSheet && !statementType.Equals("Other", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (isHtmlElement)
-                        {
-                            // For HTML Balance Sheet items not in "Other" category, Q4 = Annual value
-                            q4Value = annualValue.Value;
-                        }
-                        else
-                        {
-                            // For XBRL Balance Sheet items not in "Other" category, attempt to get Q4 directly
-                            q4Value = await GetFinancialValueAsync(connection, transaction, companyId, year, 4, elementName);
-                            if (!q4Value.HasValue)
-                            {
-                                continue; // Or handle as needed
-                            }
-                        }
+                        // For Balance Sheet items, Q4 = Annual value
+                        q4Value = annualValue.Value;
                     }
                     else
                     {
-                        // For Income Statement, Cashflow, and "Other" items, Q4 = Annual - (Q1 + Q2 + Q3)
+                        // For other statements, Q4 = Annual - (Q1 + Q2 + Q3)
                         q4Value = annualValue.Value - (q1Value.GetValueOrDefault() + q2Value.GetValueOrDefault() + q3Value.GetValueOrDefault());
                     }
 
                     string adjustedElementName = AdjustElementNameForQ4(elementName);
-                    q4Values[adjustedElementName] = q4Value; // Assign the value with the adjusted key
+                    q4ValuesConcurrent[adjustedElementName] = q4Value; // Assign the value with the adjusted key
                 }
+            });
+
+            // Merge the concurrent dictionary into the main q4Values dictionary
+            foreach (var kvp in q4ValuesConcurrent)
+            {
+                q4Values[kvp.Key] = kvp.Value;
             }
         }
+
         public static void MergeEntries(this FinancialDataEntry existingEntry, FinancialDataEntry newEntry)
         {
             existingEntry.IsXbrlParsed = existingEntry.IsXbrlParsed || newEntry.IsXbrlParsed;
@@ -712,6 +792,24 @@ WHERE CompanyID = @CompanyID AND YEAR(EndDate) = @Year";
         return dates;
     }
 }
+        private static decimal? GetFinancialValueFromEntries(
+    Dictionary<int, FinancialDataEntry> entriesByQuarter,
+    int quarter,
+    string elementName)
+        {
+            if (entriesByQuarter.TryGetValue(quarter, out var entry))
+            {
+                if (entry.FinancialValues.TryGetValue(elementName, out var valueObj))
+                {
+                    if (decimal.TryParse(valueObj.ToString(), out decimal value))
+                    {
+                        return value;
+                    }
+                }
+            }
+            return null;
+        }
+
         private static async Task<decimal?> GetFinancialValueAsync(
     SqlConnection connection,
     SqlTransaction transaction,
@@ -862,44 +960,12 @@ WHERE CompanyID = @CompanyID
             var entries = new List<FinancialDataEntry> { q4Entry };
             await SaveCompleteEntryToDatabaseAsync(entries, connection, transaction);
         }
-
-        public static async Task SaveCompleteEntryToDatabaseAsync(
-     List<FinancialDataEntry> entries,
-     SqlConnection connection,
-     SqlTransaction transaction)
-        {
-            // Corrected Insert Query
-            string insertQuery = @"
-        INSERT INTO FinancialData 
-            (CompanyID, StartDate, EndDate, Quarter, Year, FinancialDataJson, IsHtmlParsed, IsXbrlParsed)
-        VALUES 
-            (@CompanyID, @StartDate, @EndDate, @Quarter, @Year, @FinancialDataJson, @IsHtmlParsed, @IsXbrlParsed)";
-
-            foreach (var entry in entries)
-            {
-                using (SqlCommand command = new SqlCommand(insertQuery, connection, transaction))
-                {
-                    command.Parameters.AddWithValue("@CompanyID", entry.CompanyID);
-                    command.Parameters.AddWithValue("@StartDate", entry.StartDate);
-                    command.Parameters.AddWithValue("@EndDate", entry.EndDate);
-                    command.Parameters.AddWithValue("@Quarter", entry.Quarter);
-                    command.Parameters.AddWithValue("@Year", entry.Year); // Ensure 'Year' is set correctly
-                    command.Parameters.AddWithValue("@FinancialDataJson", JsonConvert.SerializeObject(entry.FinancialValues)); // Serialize FinancialValues to JSON
-                    command.Parameters.AddWithValue("@IsHtmlParsed", entry.IsHtmlParsed);
-                    command.Parameters.AddWithValue("@IsXbrlParsed", entry.IsXbrlParsed);
-
-                    await command.ExecuteNonQueryAsync();
-                }
-            }
-        }
-
         public static async Task CalculateAndSaveQ4InDatabaseAsync(
-            SqlConnection connection,
-            SqlTransaction transaction,
-            int companyId,
-            DataNonStatic dataNonStatic)
+    SqlConnection connection,
+    SqlTransaction transaction,
+    int companyId,
+    DataNonStatic dataNonStatic)
         {
-            // Ensure the CompanyFinancialData is loaded
             var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
             if (companyData == null)
             {
@@ -907,7 +973,6 @@ WHERE CompanyID = @CompanyID
                 return;
             }
 
-            // Get the most recent fiscal year end date from the cache
             DateTime? fiscalYearEndDate = companyData.GetMostRecentFiscalYearEndDate();
             if (!fiscalYearEndDate.HasValue)
             {
@@ -915,30 +980,26 @@ WHERE CompanyID = @CompanyID
                 return;
             }
 
-            // Define the reference date to determine how far back to process fiscal years
-            // Adjust 'stopDate' as per your requirements
-            DateTime stopDate = new DateTime(2012, 1, 1); // Example stop date
-
-            // Initialize loop variables
+            DateTime stopDate = new DateTime(2012, 1, 1);
             DateTime currentFiscalYearEndDate = fiscalYearEndDate.Value;
             int currentFiscalYear = CompanyFinancialData.GetFiscalYear(currentFiscalYearEndDate, 0, currentFiscalYearEndDate);
 
-            // Optional: Define a maximum number of iterations to prevent infinite loops
             int maxIterations = 11;
             int iteration = 0;
 
-            // Loop to process multiple fiscal years
+            List<FinancialDataEntry> q4Entries = new List<FinancialDataEntry>();
+
+            // Load all financial entries into memory
+            var financialEntries = companyData.FinancialEntries.Values.ToList();
+
             while (currentFiscalYearEndDate >= stopDate && iteration < maxIterations)
             {
-                Console.WriteLine($"[DEBUG] Processing Fiscal Year: {currentFiscalYear} (End Date: {currentFiscalYearEndDate.ToShortDateString()})");
+                
 
-                // Calculate fiscal year start and end dates
                 (DateTime fiscalYearStartDate, DateTime fiscalYearEndDateActual) = Data.GetStandardPeriodDates(currentFiscalYear, 0, currentFiscalYearEndDate);
 
-                // Fetch Q3 End Date asynchronously
-                DateTime q3EndDate = await GetQuarterEndDateAsync(connection, transaction, companyId, currentFiscalYear, 3);
+                DateTime q3EndDate = GetQuarterEndDateFromEntries(financialEntries, companyId, currentFiscalYear, 3);
 
-                // Determine Q4 Start Date
                 DateTime q4StartDate;
                 if (q3EndDate != DateTime.MinValue)
                 {
@@ -946,7 +1007,6 @@ WHERE CompanyID = @CompanyID
                 }
                 else
                 {
-                    // If Q3 End Date is missing, calculate based on fiscal year start
                     TimeSpan fiscalYearDuration = fiscalYearEndDateActual - fiscalYearStartDate;
                     int daysInFiscalYear = fiscalYearDuration.Days + 1;
                     int daysPerQuarter = daysInFiscalYear / 4;
@@ -954,36 +1014,56 @@ WHERE CompanyID = @CompanyID
                     Console.WriteLine($"[INFO] Q3 End Date missing for Fiscal Year {currentFiscalYear}. Calculated Q4 Start Date as {q4StartDate.ToShortDateString()}.");
                 }
 
-                // Q4 End Date is the fiscal year end date
                 DateTime q4EndDate = fiscalYearEndDateActual;
 
-                // Initialize a dictionary to hold Q4 financial values
                 var q4Values = new Dictionary<string, object>();
 
-                // Retrieve all financial element names asynchronously
-                var allElementNames = await GetAllFinancialElementsAsync(connection, transaction, companyId, currentFiscalYear);
+                var allElementNames = GetAllFinancialElementsFromEntries(financialEntries, currentFiscalYear);
 
-                // Process all financial elements to calculate Q4 values asynchronously
-                await ProcessAllFinancialElementsAsync(connection, transaction, companyId, currentFiscalYear, q4Values, allElementNames);
+                await ProcessAllFinancialElementsAsync(companyId, currentFiscalYear, q4Values, allElementNames, financialEntries);
 
-                // Insert the Q4 data into the database asynchronously
                 try
                 {
-                    await InsertQ4DataAsync(connection, transaction, companyId, currentFiscalYear, q4StartDate, q4EndDate, q4Values);
-                    Console.WriteLine($"[INFO] Successfully calculated and saved Q4 for Fiscal Year {currentFiscalYear}.");
+                    var q4Entry = new FinancialDataEntry
+                    {
+                        CompanyID = companyId,
+                        StartDate = q4StartDate,
+                        EndDate = q4EndDate,
+                        Quarter = 4,
+                        Year = currentFiscalYear,
+                        IsHtmlParsed = true,
+                        IsXbrlParsed = true,
+                        FinancialValues = q4Values
+                    };
+
+                    q4Entries.Add(q4Entry);
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[ERROR] Failed to insert Q4 data for Fiscal Year {currentFiscalYear}: {ex.Message}");
-                    // Depending on requirements, decide whether to continue or break
-                    // For this example, we'll continue to process other fiscal years
+                    Console.WriteLine($"[ERROR] Failed to prepare Q4 data for Fiscal Year {currentFiscalYear}: {ex.Message}");
                 }
 
-                // Adjust to previous fiscal year
                 currentFiscalYearEndDate = currentFiscalYearEndDate.AddYears(-1);
                 currentFiscalYear = CompanyFinancialData.GetFiscalYear(currentFiscalYearEndDate, 0, currentFiscalYearEndDate);
 
                 iteration++;
+            }
+
+            if (q4Entries.Count > 0)
+            {
+                try
+                {
+                    await SaveCompleteEntryToDatabaseAsync(q4Entries, connection, transaction);
+                    Console.WriteLine($"[INFO] Successfully saved all Q4 entries for CompanyID: {companyId}.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] Failed to insert Q4 data: {ex.Message}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"[INFO] No Q4 entries to save for CompanyID: {companyId}.");
             }
 
             if (iteration >= maxIterations)
@@ -992,6 +1072,18 @@ WHERE CompanyID = @CompanyID
             }
         }
 
+        private static DateTime GetQuarterEndDateFromEntries(
+    List<FinancialDataEntry> financialEntries,
+    int companyId,
+    int year,
+    int quarter)
+        {
+            var entry = financialEntries.FirstOrDefault(e =>
+                e.CompanyID == companyId &&
+                e.Year == year &&
+                e.Quarter == quarter);
+            return entry?.EndDate ?? DateTime.MinValue;
+        }
         public static int GetFiscalYear(DateTime endDate, int quarter, DateTime? fiscalYearEndDate = null)
         {
             if (fiscalYearEndDate.HasValue)
@@ -1028,29 +1120,58 @@ WHERE CompanyID = @CompanyID
                 }
             }
         }
-        public static async Task SaveCompleteEntryToDatabase(List<FinancialDataEntry> entries, SqlConnection connection, SqlTransaction transaction)
+        public static async Task SaveCompleteEntryToDatabaseAsync(
+    List<FinancialDataEntry> entries,
+    SqlConnection connection,
+    SqlTransaction transaction)
         {
             if (entries == null || !entries.Any()) return;
-            DataTable table = CreateDataTable(entries, connection, transaction);
-            TimeSpan leeway = TimeSpan.FromDays(15);
-            DataTable existingRows = FetchExistingRows(connection, transaction, entries.First().CompanyID, table, leeway);
+
+            DataTable table = CreateDataTable(entries);
+
+            if (table.Rows.Count == 0)
+            {
+                Console.WriteLine("[INFO] No new entries to insert.");
+                return;
+            }
+
+            // Fetch existing entries to avoid duplicates
+            DataTable existingRows = FetchExistingRows(connection, transaction, entries.First().CompanyID, table, TimeSpan.FromDays(15));
+
             // Determine rows to insert (exclude existing ones)
             var rowsToInsertEnumerable = table.AsEnumerable().Where(newRow =>
                 !existingRows.AsEnumerable().Any(existingRow =>
                     existingRow.Field<int>("CompanyID") == newRow.Field<int>("CompanyID") &&
                     existingRow.Field<DateTime>("StartDate") == newRow.Field<DateTime>("StartDate") &&
                     existingRow.Field<DateTime>("EndDate") == newRow.Field<DateTime>("EndDate")));
+
             DataTable rowsToInsert = null;
             if (rowsToInsertEnumerable.Any())
             {
                 rowsToInsert = rowsToInsertEnumerable.CopyToDataTable();
             }
+
             if (rowsToInsert != null && rowsToInsert.Rows.Count > 0)
-            {  // Perform bulk insert for new rows
-                await BulkInsert(rowsToInsert, connection, transaction);
-            }   // Update the method call to include the leeway
-            await UpdateExistingRecords(entries, connection, transaction, existingRows, leeway);
+            {
+                // Perform bulk insert for new rows
+                try
+                {
+                    await BulkInsert(rowsToInsert, connection, transaction);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] Bulk insert failed: {ex.Message}");
+                    throw;
+                }
+            }
+
+            // Update existing records if necessary
+            await UpdateExistingRecords(entries, connection, transaction, existingRows, TimeSpan.FromDays(15));
         }
+
+
+
+
         private static async Task BulkInsert(DataTable table, SqlConnection connection, SqlTransaction transaction)
         {
             using (SqlBulkCopy bulkCopy = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction))
@@ -1071,6 +1192,7 @@ WHERE CompanyID = @CompanyID
                 }
             }
         }
+
         private static async Task UpdateExistingRecords(List<FinancialDataEntry> entries, SqlConnection connection, SqlTransaction transaction, DataTable existingRows, TimeSpan leeway)
         {
             foreach (var entry in entries)
@@ -1080,7 +1202,8 @@ WHERE CompanyID = @CompanyID
                     Math.Abs((row.Field<DateTime>("StartDate") - entry.StartDate).TotalDays) <= leeway.TotalDays &&
                     Math.Abs((row.Field<DateTime>("EndDate") - entry.EndDate).TotalDays) <= leeway.TotalDays);
                 if (existingRow != null)
-                {  // Retrieve existing FinancialDataJson from the database
+                {
+                    // Retrieve existing FinancialDataJson from the database
                     string selectQuery = @"
                 SELECT FinancialDataJson, IsHtmlParsed, IsXbrlParsed
                 FROM FinancialData
@@ -1105,12 +1228,13 @@ WHERE CompanyID = @CompanyID
                     } // selectCommand is disposed here
                     if (existingJson != null)
                     {
-                        var existingFinancialValues = ParseFinancialDataJson(existingJson);   // Merge the existing data with the new data
+                        var existingFinancialValues = ParseFinancialDataJson(existingJson);
                         var mergedFinancialValues = new Dictionary<string, object>(existingFinancialValues, StringComparer.OrdinalIgnoreCase);
                         foreach (var kvp in entry.FinancialValues)
                         {
                             mergedFinancialValues[kvp.Key] = kvp.Value;
-                        }      // Update the IsHtmlParsed and IsXbrlParsed flags
+                        }
+                        // Update the IsHtmlParsed and IsXbrlParsed flags
                         bool updatedIsHtmlParsed = existingIsHtmlParsed || entry.IsHtmlParsed;
                         bool updatedIsXbrlParsed = existingIsXbrlParsed || entry.IsXbrlParsed;
                         // Prepare update command
@@ -1172,44 +1296,52 @@ WHERE CompanyID = @CompanyID
             }
             return existingRows;
         }
-        public static DataTable CreateDataTable(List<FinancialDataEntry> entries, SqlConnection connection, SqlTransaction transaction)
+        public static DataTable CreateDataTable(List<FinancialDataEntry> entries)
         {
             DataTable table = new DataTable();
             table.Columns.Add("CompanyID", typeof(int));
-            table.Columns.Add("StartDate", typeof(DateTime)); // Use StandardStartDate
-            table.Columns.Add("EndDate", typeof(DateTime));   // Use StandardEndDate
+            table.Columns.Add("StartDate", typeof(DateTime));
+            table.Columns.Add("EndDate", typeof(DateTime));
             table.Columns.Add("Quarter", typeof(int));
             table.Columns.Add("Year", typeof(int));
             table.Columns.Add("FinancialDataJson", typeof(string));
             table.Columns.Add("IsHtmlParsed", typeof(bool));
             table.Columns.Add("IsXbrlParsed", typeof(bool));
+
             var uniqueRows = new HashSet<(int CompanyID, DateTime StartDate, DateTime EndDate)>();
+
             foreach (var entry in entries)
             {
-                if (entry.StandardStartDate < new DateTime(1753, 1, 1) || entry.StandardEndDate < new DateTime(1753, 1, 1))
+                // Validate dates
+                if (entry.StartDate < new DateTime(1753, 1, 1) || entry.EndDate < new DateTime(1753, 1, 1))
                 {
-                    continue; // Skip invalid dates
+                    Console.WriteLine($"[WARNING] Skipping entry with invalid dates for CompanyID: {entry.CompanyID}");
+                    continue;
                 }
-                var uniqueKey = (entry.CompanyID, entry.StandardStartDate, entry.StandardEndDate);
+
+                var uniqueKey = (entry.CompanyID, entry.StartDate, entry.EndDate);
                 if (uniqueRows.Contains(uniqueKey))
                 {
+                    Console.WriteLine($"[INFO] Duplicate entry found for CompanyID: {entry.CompanyID}, StartDate: {entry.StartDate}, EndDate: {entry.EndDate}. Skipping.");
                     continue; // Skip duplicates
                 }
                 uniqueRows.Add(uniqueKey);
+
                 DataRow row = table.NewRow();
                 row["CompanyID"] = entry.CompanyID;
-                row["StartDate"] = entry.StandardStartDate;
-                row["EndDate"] = entry.StandardEndDate;
-                row["Quarter"] = entry.Quarter;   // Calculate Fiscal Year based on standardized EndDate and FiscalYearEndDate
-                int fiscalYear = Data.GetFiscalYear(entry.StandardEndDate, entry.Quarter, entry.FiscalYearEndDate);
-                row["Year"] = fiscalYear; // Set Year as an integer
+                row["StartDate"] = entry.StartDate;
+                row["EndDate"] = entry.EndDate;
+                row["Quarter"] = entry.Quarter;
+                row["Year"] = entry.Year;
                 row["FinancialDataJson"] = JsonConvert.SerializeObject(entry.FinancialValues);
                 row["IsHtmlParsed"] = entry.IsHtmlParsed;
                 row["IsXbrlParsed"] = entry.IsXbrlParsed;
                 table.Rows.Add(row);
             }
+
             return table;
         }
+
         public static DateTime GetFiscalYearEndForSpecificYearWithFallback(int companyId, int year, SqlConnection connection, SqlTransaction transaction)
         {
             try
