@@ -7,6 +7,7 @@ using System.Data.SqlClient;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Data;
+using System.Collections.Generic;
 
 namespace HTML
 {
@@ -86,9 +87,103 @@ namespace HTML
             var closestQuarterEnd = quarterEnds.OrderBy(q => Math.Abs((q - date).TotalDays)).First();
             return closestQuarterEnd;
         }
-        public static async Task ProcessInteractiveData(ChromeDriver driver, string interactiveDataUrl, string companyName, string companySymbol, bool isAnnualReport, string filingUrl, int companyId, DataNonStatic dataNonStatic)
+        //public static async Task ProcessInteractiveData(ChromeDriver driver, string interactiveDataUrl, string companyName, string companySymbol, bool isAnnualReport, string filingUrl, int companyId, DataNonStatic dataNonStatic)
+        //{
+        //    var parsedEntries = new List<FinancialDataEntry>(); // List to accumulate parsed entries
+        //    await driverSemaphore.WaitAsync();
+        //    try
+        //    {
+        //        var dataTimer = Stopwatch.StartNew();
+        //        bool loadedSuccessfully = false;
+        //        int retries = 0;
+        //        const int maxRetries = 3;
+        //        const int retryDelay = 5000;
+        //        while (!loadedSuccessfully && retries < maxRetries)
+        //        {
+        //            try
+        //            {
+        //                driver.Navigate().GoToUrl(interactiveDataUrl);
+        //                var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10));
+        //                wait.Until(d => ((IJavaScriptExecutor)d).ExecuteScript("return document.readyState").Equals("complete"));
+        //                loadedSuccessfully = true;
+        //                await Task.Delay(1000);  // Small delay to ensure page content is fully loaded
+        //                var financialStatementButtons = driver.FindElements(By.XPath("//a[starts-with(@id, 'menu_cat') and contains(text(), 'Financial Statements') and not(contains(text(), 'Notes'))]"));
+        //                bool isFirstReport = true;
+        //                foreach (var financialStatementsButton in financialStatementButtons)
+        //                {
+        //                    try
+        //                    {
+        //                        ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", financialStatementsButton);
+        //                        await Task.Delay(300);
+        //                        ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", financialStatementsButton);
+        //                        await Task.Delay(400);
+        //                        var accordionElements = driver.FindElements(By.XPath("//ul[@style='display: block;']//li[contains(@class, 'accordion')]//a[contains(@class, 'xbrlviewer')]"));
+        //                        if (accordionElements.Count == 0)
+        //                        {
+        //                            continue;
+        //                        }
+        //                        foreach (var accordionElement in accordionElements)
+        //                        {
+        //                            try
+        //                            { // Extract the statement name from the button text
+        //                                string statementName = accordionElement.Text.Trim();
+        //                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", accordionElement);
+        //                                await Task.Delay(400);
+        //                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", accordionElement);
+        //                                await Task.Delay(400);
+        //                                var reportElement = wait.Until(ExpectedConditions.ElementIsVisible(By.XPath("//table[contains(@class, 'report')]")));
+        //                                string reportHtml = reportElement.GetAttribute("outerHTML");
+        //                                var parsedHtmlElements = await ParseHtmlForElementsOfInterest(reportHtml, isAnnualReport, companyName, companySymbol, companyId, dataNonStatic, statementName);
+        //                                if (parsedHtmlElements.Count == 0)
+        //                                {
+        //                                    continue;
+        //                                }
+        //                            }
+        //                            catch (Exception ex)
+        //                            {
+        //                                Console.WriteLine($"[ERROR] Exception during parsing HTML for {companyName} ({companySymbol}): {ex.Message}");
+        //                            }
+        //                        }
+        //                    }
+        //                    catch (Exception ex)
+        //                    {
+        //                        Console.WriteLine($"[ERROR] Exception clicking financial statement button for {companyName} ({companySymbol}): {ex.Message}");
+        //                    }
+        //                }
+        //            }
+        //            catch (WebDriverTimeoutException ex)
+        //            {
+        //                retries++;
+        //                Console.WriteLine($"[ERROR] Timeout loading interactive data (retry {retries}/{maxRetries}) for {companyName} ({companySymbol}): {ex.Message}");
+        //                if (retries >= maxRetries)
+        //                {
+        //                    Console.WriteLine($"[ERROR] Failed to load interactive data after maximum retries for {companyName} ({companySymbol}).");
+        //                }
+        //                else
+        //                {
+        //                    await Task.Delay(retryDelay);
+        //                }
+        //            }
+        //        }
+
+        //        dataTimer.Stop();
+        //    }
+        //    finally
+        //    {
+        //        driverSemaphore.Release(); // Release the driver slot
+        //    }
+        //}
+        public static async Task ProcessInteractiveData(
+    ChromeDriver driver,
+    string interactiveDataUrl,
+    string companyName,
+    string companySymbol,
+    bool isAnnualReport,
+    string filingUrl,
+    int companyId,
+    DataNonStatic dataNonStatic)
         {
-            var parsedEntries = new List<FinancialDataEntry>(); // List to accumulate parsed entries
+            // Removed parsedEntries as it's no longer needed
             await driverSemaphore.WaitAsync();
             try
             {
@@ -106,47 +201,78 @@ namespace HTML
                         wait.Until(d => ((IJavaScriptExecutor)d).ExecuteScript("return document.readyState").Equals("complete"));
                         loadedSuccessfully = true;
                         await Task.Delay(1000);  // Small delay to ensure page content is fully loaded
-                        var financialStatementButtons = driver.FindElements(By.XPath("//a[starts-with(@id, 'menu_cat') and contains(text(), 'Financial Statements') and not(contains(text(), 'Notes'))]"));
-                        bool isFirstReport = true;
-                        foreach (var financialStatementsButton in financialStatementButtons)
+
+                        // Locate all "Financial Statements" buttons
+                        var financialStatementButtons = driver.FindElements(By.XPath(
+                            "//a[starts-with(@id, 'menu_cat') and contains(text(), 'Financial Statements') and not(contains(text(), 'Notes'))]"));
+
+                        if (financialStatementButtons.Count == 0)
+                        {
+                            Console.WriteLine($"[WARNING] No 'Financial Statements' buttons found for {companyName} ({companySymbol}).");
+                            return;
+                        }
+
+                        // Click all "Financial Statements" buttons to open their dropdowns
+                        foreach (var button in financialStatementButtons)
                         {
                             try
                             {
-                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", financialStatementsButton);
-                                await Task.Delay(300);
-                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", financialStatementsButton);
-                                await Task.Delay(400);
-                                var accordionElements = driver.FindElements(By.XPath("//ul[@style='display: block;']//li[contains(@class, 'accordion')]//a[contains(@class, 'xbrlviewer')]"));
-                                if (accordionElements.Count == 0)
-                                {
-                                    continue;
-                                }
-                                foreach (var accordionElement in accordionElements)
-                                {
-                                    try
-                                    { // Extract the statement name from the button text
-                                        string statementName = accordionElement.Text.Trim();
-                                        ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", accordionElement);
-                                        await Task.Delay(400);
-                                        ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", accordionElement);
-                                        await Task.Delay(400);
-                                        var reportElement = wait.Until(ExpectedConditions.ElementIsVisible(By.XPath("//table[contains(@class, 'report')]")));
-                                        string reportHtml = reportElement.GetAttribute("outerHTML");
-                                        var parsedHtmlElements = await ParseHtmlForElementsOfInterest(reportHtml, isAnnualReport, companyName, companySymbol, companyId, dataNonStatic, statementName);
-                                        if (parsedHtmlElements.Count == 0)
-                                        {
-                                            continue;
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"[ERROR] Exception during parsing HTML for {companyName} ({companySymbol}): {ex.Message}");
-                                    }
-                                }
+                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", button);
+                                await Task.Delay(200);  // Reduced delay for efficiency
+                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", button);
+                                await Task.Delay(300);  // Wait for dropdown to open
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[ERROR] Exception clicking financial statement button for {companyName} ({companySymbol}): {ex.Message}");
+                                Console.WriteLine($"[ERROR] Exception clicking 'Financial Statements' button for {companyName} ({companySymbol}): {ex.Message}");
+                            }
+                        }
+
+                        // After all dropdowns are open, collect all accordion elements
+                        var accordionElements = driver.FindElements(By.XPath(
+                            "//ul[contains(@style, 'display: block')]//li[contains(@class, 'accordion')]//a[contains(@class, 'xbrlviewer')]"));
+
+                        if (accordionElements.Count == 0)
+                        {
+                            Console.WriteLine($"[WARNING] No accordion elements found for {companyName} ({companySymbol}).");
+                            return;
+                        }
+
+                        // Process each accordion element
+                        foreach (var accordionElement in accordionElements)
+                        {
+                            try
+                            {
+                                string statementName = accordionElement.Text.Trim();
+                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", accordionElement);
+                                await Task.Delay(200);
+                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", accordionElement);
+                                await Task.Delay(300);
+
+                                // Wait for the report table to be visible
+                                var reportElement = wait.Until(ExpectedConditions.ElementIsVisible(By.XPath("//table[contains(@class, 'report')]")));
+                                string reportHtml = reportElement.GetAttribute("outerHTML");
+
+                                // Parse the HTML for elements of interest
+                                var parsedHtmlElements = await ParseHtmlForElementsOfInterest(
+                                    reportHtml,
+                                    isAnnualReport,
+                                    companyName,
+                                    companySymbol,
+                                    companyId,
+                                    dataNonStatic,
+                                    statementName);
+                                // Optionally, collapse the accordion after processing
+                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", accordionElement);
+                                await Task.Delay(200);
+                            }
+                            catch (WebDriverTimeoutException ex)
+                            {
+                                Console.WriteLine($"[ERROR] Timeout waiting for report table in {companyName} ({companySymbol}): {ex.Message}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[ERROR] Exception processing accordion in {companyName} ({companySymbol}): {ex.Message}");
                             }
                         }
                     }
@@ -166,12 +292,17 @@ namespace HTML
                 }
 
                 dataTimer.Stop();
+
+                // Optionally, handle other post-processing tasks here
             }
             finally
             {
                 driverSemaphore.Release(); // Release the driver slot
             }
         }
+
+
+
         public static async Task<List<string>> ParseHtmlForElementsOfInterest(
     string htmlContent,
     bool isAnnualReport,
@@ -213,8 +344,7 @@ namespace HTML
                     DateTime adjustedFiscalYearEndDate = isAnnualReport
                        ? fiscalYearEndDate.Value // Do not adjust for annual reports
                        : Data.Data.AdjustToNearestQuarterEndDate(fiscalYearEndDate.Value); // Adjust for quarterly reports
-                    Console.WriteLine($"[DEBUG] Adjusted fiscal year end date: {adjustedFiscalYearEndDate.ToShortDateString()} for {companyName} ({companySymbol})");
-
+                   
                     // Step 3: Determine Fiscal Year and Quarter
                     int fiscalYear;
                     int quarter;
@@ -235,7 +365,7 @@ namespace HTML
                         fiscalYear = determinedFiscalYear;
                         quarter = determinedQuarter;
                         fiscalYearEndDateFinal = determinedFiscalYearEndDate;
-                        Console.WriteLine($"[DEBUG] Determined Fiscal Year: {fiscalYear}, Quarter: {quarter} for Quarterly Report for CompanyID: {companyId}");
+         
                     }
 
                     // Step 4: Calculate Report Start and End Dates Based on Fiscal Year and Quarter
@@ -302,8 +432,7 @@ namespace HTML
 
                     // Step 6: Extract Scaling Factors
                     var (sharesMultiplier, dollarMultiplier) = ExtractScalingFactor(htmlDocument);
-                    Console.WriteLine($"[DEBUG] Extracted scaling factors: SharesMultiplier = {sharesMultiplier}, DollarMultiplier = {dollarMultiplier}");
-
+ 
                     // Step 7: Process the Data Rows
                     foreach (var row in rows)
                     {
@@ -335,25 +464,17 @@ namespace HTML
                             elements.Add(label); // Add the element label to the parsed elements list
                         }
                     }
-
-                    Console.WriteLine($"[DEBUG] FinancialDataEntry populated with {parsedData.FinancialValues.Count} financial values.");
-
                     // Step 8: Set Year and Quarter Explicitly
                     if (isAnnualReport)
                     {
                         parsedData.Quarter = 0;
                         parsedData.Year = fiscalYear; // Set Year to the year of EndDate
-                        Console.WriteLine($"[DEBUG] Set Quarter to 0 and Year to {parsedData.Year} for Annual Report for CompanyID: {companyId}");
                     }
-                    else
-                    {
-                        // For quarterly reports, Year is already set via DetermineFiscalYearAndQuarterAsync
-                        Console.WriteLine($"[DEBUG] Set Year to {parsedData.Year} for Quarterly Report for CompanyID: {companyId}");
-                    }
+              
 
                     // Step 9: Add the fully populated FinancialDataEntry to dataNonStatic
                     await dataNonStatic.AddParsedDataAsync(companyId, parsedData);
-                    Console.WriteLine($"[INFO] Added FinancialDataEntry for CompanyID: {companyId}, FiscalYear: {fiscalYear}, Quarter: {quarter}");
+                    
                 }
             }
             catch (Exception ex)

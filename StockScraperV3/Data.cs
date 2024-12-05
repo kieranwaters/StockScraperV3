@@ -278,7 +278,7 @@ WHERE CompanyID = @CompanyID";
         if (relevantAnnualReport == null)
         {   // Handle if no annual report is before the quarterly report
             relevantAnnualReport = annualReports.Last(); // Use the earliest annual report
-            Console.WriteLine($"[INFO] No annual report before quarterly report. Using FiscalYearEndDate: {relevantAnnualReport.EndDate.ToShortDateString()}");
+            
         }  // Step 4: Calculate Fiscal Year Start and End Dates
         DateTime fiscalYearEndDate = relevantAnnualReport.EndDate.Date;
         DateTime fiscalYearStartDate = fiscalYearEndDate.AddYears(-1).AddDays(1).Date;        
