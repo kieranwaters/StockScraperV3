@@ -342,49 +342,6 @@ WHERE CompanyID = @CompanyID";
             DateTime adjustedDate = new DateTime(fiscalYearEndDate.Year, nearestQuarterEndMonth, lastDay);
             return adjustedDate;
         }
-        private static void ProcessAllFinancialElements(SqlConnection connection, SqlTransaction transaction, int companyId, int year, Dictionary<string, object> q4Values, List<string> elementNames)
-        {
-            foreach (var elementName in elementNames)
-            {   // Adjust the element name for annual value retrieval
-                string annualElementName = AdjustElementNameForAnnual(elementName);
-                string q1ElementName = AdjustElementNameForQuarter(elementName, 1);// Adjust the element names for each quarter
-                string q2ElementName = AdjustElementNameForQuarter(elementName, 2);
-                string q3ElementName = AdjustElementNameForQuarter(elementName, 3);
-                // Retrieve financial values using the adjusted element names
-                decimal? annualValue = GetFinancialValue(connection, transaction, companyId, year, 0, annualElementName);
-                decimal? q1Value = GetNullableFinancialValue(connection, transaction, companyId, year, 1, q1ElementName);
-                decimal? q2Value = GetNullableFinancialValue(connection, transaction, companyId, year, 2, q2ElementName);
-                decimal? q3Value = GetNullableFinancialValue(connection, transaction, companyId, year, 3, q3ElementName);
-                decimal? q4Value;
-                if (annualValue.HasValue)
-                {
-                    bool isHtmlElement = elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase);
-                    string statementType = GetStatementType(elementName);
-                    bool isBalanceSheet = statementType.Equals("Balance Sheet", StringComparison.OrdinalIgnoreCase);
-                    if (isBalanceSheet && !statementType.Equals("Other", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (isHtmlElement)
-                        {   // For HTML Balance Sheet items not in "Other" category, Q4 = Annual value
-                            q4Value = annualValue.Value;
-                        }
-                        else
-                        {   // For XBRL Balance Sheet items not in "Other" category, attempt to get Q4 directly
-                            q4Value = GetFinancialValue(connection, transaction, companyId, year, 4, elementName);
-                            if (!q4Value.HasValue)
-                            {
-                                continue; // Or handle as needed
-                            }
-                        }
-                    }
-                    else
-                    {   // For Income Statement, Cashflow, and "Other" items, Q4 = Annual - (Q1 + Q2 + Q3)
-                        q4Value = annualValue.Value - (q1Value.GetValueOrDefault() + q2Value.GetValueOrDefault() + q3Value.GetValueOrDefault());
-                    }
-                    string adjustedElementName = AdjustElementNameForQ4(elementName); // Adjust the element name for Q4                    
-                    q4Values[adjustedElementName] = q4Value;// Assign the value with the adjusted key
-                }
-            }
-        }
         private static string GetStatementType(string elementName)
         {
             if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
@@ -568,124 +525,6 @@ WHERE CompanyID = @CompanyID";
             }
             return (periodStart, periodEnd);
         }
-        private static void InsertQ4Data(SqlConnection connection, SqlTransaction transaction, int companyId, int year, DateTime startDate, DateTime endDate, Dictionary<string, object> q4Values)
-        {    // Calculate fiscal year based on endDate and quarter
-            int fiscalYear = CompanyFinancialData.GetFiscalYear(endDate, 4, (DateTime?)endDate);
-            (DateTime standardStartDate, DateTime standardEndDate) = Data.GetStandardPeriodDates(fiscalYear, 4, (DateTime?)endDate);
-            var q4Entry = new FinancialDataEntry// Initialize the Q4 FinancialDataEntry with standardized dates
-            {
-                CompanyID = companyId,
-                StartDate = startDate, // Parsed StartDate
-                EndDate = endDate,     // Parsed EndDate
-                Quarter = 4,
-                IsHtmlParsed = true,
-                IsXbrlParsed = true,
-                FinancialValues = q4Values,
-                StandardStartDate = standardStartDate, // Set StandardStartDate
-                StandardEndDate = standardEndDate,      // Set StandardEndDate
-                FiscalYearEndDate = endDate             // Set FiscalYearEndDate
-            };
-            var entries = new List<FinancialDataEntry> { q4Entry };
-            SaveCompleteEntryToDatabase(entries, connection, transaction).Wait();
-        }
-        //    public static async Task CalculateAndSaveQ4InDatabaseAsync(
-        //SqlConnection connection,
-        //SqlTransaction transaction,
-        //int companyId,
-        //DataNonStatic dataNonStatic)
-        //    {
-        //        // Ensure the CompanyFinancialData is loaded
-        //        var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
-        //        if (companyData == null)
-        //        {
-        //            Console.WriteLine($"[ERROR] Failed to load CompanyData for CompanyID: {companyId}. Cannot calculate Q4.");
-        //            return;
-        //        }
-
-        //        // Get the most recent fiscal year end date from the cache
-        //        DateTime? fiscalYearEndDate = companyData.GetMostRecentFiscalYearEndDate();
-        //        if (!fiscalYearEndDate.HasValue)
-        //        {
-        //            Console.WriteLine($"[ERROR] No fiscal year end date found for CompanyID: {companyId}. Cannot calculate Q4.");
-        //            return;
-        //        }
-
-        //        // Define the reference date to determine how far back to process fiscal years
-        //        // Adjust 'stopDate' as per your requirements
-        //        DateTime stopDate = new DateTime(2012, 1, 1); // Example stop date
-
-        //        // Initialize loop variables
-        //        DateTime currentFiscalYearEndDate = fiscalYearEndDate.Value;
-        //        int currentFiscalYear = CompanyFinancialData.GetFiscalYear(currentFiscalYearEndDate, 0, currentFiscalYearEndDate);
-
-        //        // Optional: Define a maximum number of iterations to prevent infinite loops
-        //        int maxIterations = 11;
-        //        int iteration = 0;
-
-        //        // Loop to process multiple fiscal years
-        //        while (currentFiscalYearEndDate >= stopDate && iteration < maxIterations)
-        //        {
-        //            Console.WriteLine($"[DEBUG] Processing Fiscal Year: {currentFiscalYear} (End Date: {currentFiscalYearEndDate.ToShortDateString()})");
-
-        //            // Calculate fiscal year start and end dates
-        //            (DateTime fiscalYearStartDate, DateTime fiscalYearEndDateActual) = Data.GetStandardPeriodDates(currentFiscalYear, 0, currentFiscalYearEndDate);
-
-        //            // Fetch Q3 End Date
-        //            DateTime q3EndDate = GetQuarterEndDate(connection, transaction, companyId, currentFiscalYear, 3);
-
-        //            // Determine Q4 Start Date
-        //            DateTime q4StartDate;
-        //            if (q3EndDate != DateTime.MinValue)
-        //            {
-        //                q4StartDate = q3EndDate.AddDays(1);
-        //            }
-        //            else
-        //            {
-        //                // If Q3 End Date is missing, calculate based on fiscal year start
-        //                TimeSpan fiscalYearDuration = fiscalYearEndDateActual - fiscalYearStartDate;
-        //                int daysInFiscalYear = fiscalYearDuration.Days + 1;
-        //                int daysPerQuarter = daysInFiscalYear / 4;
-        //                q4StartDate = fiscalYearStartDate.AddDays(3 * daysPerQuarter);
-        //                Console.WriteLine($"[INFO] Q3 End Date missing for Fiscal Year {currentFiscalYear}. Calculated Q4 Start Date as {q4StartDate.ToShortDateString()}.");
-        //            }
-
-        //            // Q4 End Date is the fiscal year end date
-        //            DateTime q4EndDate = fiscalYearEndDateActual;
-
-        //            // Initialize a dictionary to hold Q4 financial values
-        //            var q4Values = new Dictionary<string, object>();
-
-        //            // Retrieve all financial element names for the current fiscal year
-        //            var allElementNames = GetAllFinancialElements(connection, transaction, companyId, currentFiscalYear);
-
-        //            // Process all financial elements to calculate Q4 values
-        //            ProcessAllFinancialElements(connection, transaction, companyId, currentFiscalYear, q4Values, allElementNames);
-
-        //            // Insert the Q4 data into the database
-        //            try
-        //            {
-        //                InsertQ4Data(connection, transaction, companyId, currentFiscalYear, q4StartDate, q4EndDate, q4Values);
-        //                Console.WriteLine($"[INFO] Successfully calculated and saved Q4 for Fiscal Year {currentFiscalYear}.");
-        //            }
-        //            catch (Exception ex)
-        //            {
-        //                Console.WriteLine($"[ERROR] Failed to insert Q4 data for Fiscal Year {currentFiscalYear}: {ex.Message}");
-        //                // Depending on requirements, decide whether to continue or break
-        //                // For this example, we'll continue to process other fiscal years
-        //            }
-
-        //            // Adjust to previous fiscal year
-        //            currentFiscalYearEndDate = currentFiscalYearEndDate.AddMonths(-12);
-        //            currentFiscalYear = CompanyFinancialData.GetFiscalYear(currentFiscalYearEndDate, 0, currentFiscalYearEndDate);
-
-        //            iteration++;
-        //        }
-
-        //        if (iteration >= maxIterations)
-        //        {
-        //            Console.WriteLine($"[WARNING] Reached maximum iterations ({maxIterations}) while calculating Q4 for CompanyID: {companyId}. Some fiscal years may not have been processed.");
-        //        }
-        //    }
         private static async Task<DateTime> GetQuarterEndDateAsync(
     SqlConnection connection,
     SqlTransaction transaction,
@@ -822,34 +661,6 @@ WHERE CompanyID = @CompanyID AND YEAR(EndDate) = @Year";
                     q4Values[adjustedElementName] = q4Value; // Assign the value with the adjusted key
                 }
             }
-        }
-
-
-        private static List<string> GetAllFinancialElements(SqlConnection connection, SqlTransaction transaction, int companyId, int year)
-        {
-            var elementNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string query = @"
-        SELECT FinancialDataJson
-        FROM FinancialData
-        WHERE CompanyID = @CompanyID AND YEAR(EndDate) = @Year";
-            using (SqlCommand command = new SqlCommand(query, connection, transaction))
-            {
-                command.Parameters.AddWithValue("@CompanyID", companyId);
-                command.Parameters.AddWithValue("@Year", year);
-                using (SqlDataReader reader = command.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        string jsonData = reader.GetString(0);
-                        var financialData = ParseFinancialDataJson(jsonData);
-                        foreach (var key in financialData.Keys)
-                        {
-                            elementNames.Add(key);
-                        }
-                    }
-                }
-            }
-            return elementNames.ToList();
         }
         public static void MergeEntries(this FinancialDataEntry existingEntry, FinancialDataEntry newEntry)
         {
@@ -1023,13 +834,13 @@ WHERE CompanyID = @CompanyID
             return await GetFinancialValueAsync(connection, transaction, companyId, year, quarter, elementName);
         }
         private static async Task InsertQ4DataAsync(
-            SqlConnection connection,
-            SqlTransaction transaction,
-            int companyId,
-            int year,
-            DateTime startDate,
-            DateTime endDate,
-            Dictionary<string, object> q4Values)
+    SqlConnection connection,
+    SqlTransaction transaction,
+    int companyId,
+    int year,
+    DateTime startDate,
+    DateTime endDate,
+    Dictionary<string, object> q4Values)
         {
             // Calculate fiscal year based on endDate and quarter
             int fiscalYear = CompanyFinancialData.GetFiscalYear(endDate, 4, (DateTime?)endDate);
@@ -1041,17 +852,17 @@ WHERE CompanyID = @CompanyID
                 StartDate = startDate, // Parsed StartDate
                 EndDate = endDate,     // Parsed EndDate
                 Quarter = 4,
+                Year = fiscalYear,     // **Explicitly set Year**
                 IsHtmlParsed = true,
                 IsXbrlParsed = true,
-                FinancialValues = q4Values,
-                StandardStartDate = standardStartDate, // Set StandardStartDate
-                StandardEndDate = standardEndDate,      // Set StandardEndDate
-                FiscalYearEndDate = endDate             // Set FiscalYearEndDate
+                FinancialValues = q4Values
+                // Removed StandardStartDate, StandardEndDate, FiscalYearEndDate
             };
 
             var entries = new List<FinancialDataEntry> { q4Entry };
             await SaveCompleteEntryToDatabaseAsync(entries, connection, transaction);
         }
+
         public static async Task SaveCompleteEntryToDatabaseAsync(
      List<FinancialDataEntry> entries,
      SqlConnection connection,
@@ -1450,28 +1261,6 @@ WHERE CompanyID = @CompanyID
                 return 0; // Before fiscal year start
             else
                 return 4; // After fiscal year end
-        }
-        private static DateTime GetQuarterEndDate(SqlConnection connection, SqlTransaction transaction, int companyId, int year, int quarter)
-        {
-            string query = @"
-SELECT EndDate
-FROM FinancialData
-WHERE CompanyID = @CompanyID AND YEAR(EndDate) = @Year AND Quarter = @Quarter";
-            using (SqlCommand command = new SqlCommand(query, connection, transaction))
-            {
-                command.Parameters.AddWithValue("@CompanyID", companyId);
-                command.Parameters.AddWithValue("@Year", year);
-                command.Parameters.AddWithValue("@Quarter", quarter);
-                object result = command.ExecuteScalar();
-                if (result != null && DateTime.TryParse(result.ToString(), out DateTime endDate))
-                {
-                    return endDate;
-                }
-                else
-                {
-                    return DateTime.MinValue;
-                }
-            }
         }
         private static SqlCommand CloneCommand(SqlCommand originalCommand)
         {
