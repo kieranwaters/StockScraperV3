@@ -410,9 +410,6 @@ namespace HTML
 
                         reportStartDate = periodStart;
                         reportEndDate = periodEnd;
-
-                        Console.WriteLine($"[DEBUG] Quarterly Report's Period Start Date: {reportStartDate.ToShortDateString()}");
-                        Console.WriteLine($"[DEBUG] Quarterly Report's Period End Date: {reportEndDate.ToShortDateString()}");
                     }
 
                     // Step 5: Initialize FinancialDataEntry with Report Dates
