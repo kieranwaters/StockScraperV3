@@ -3,8 +3,6 @@ using Newtonsoft.Json;
 using System.Collections.Concurrent;
 using System.Data;
 using System.Text.RegularExpressions;
-using OpenQA.Selenium;
-using OfficeOpenXml.Drawing;
 
 namespace Data
 {
@@ -144,7 +142,6 @@ namespace Data
 
             if (!entriesToSave.Any())
             {
-                Console.WriteLine($"[INFO] No entries to save for CompanyID: {companyId}.");
                 return;
             }
 
@@ -157,7 +154,6 @@ namespace Data
                     {
                         await Data.SaveCompleteEntryToDatabaseAsync(entriesToSave, connection, transaction);
                         transaction.Commit();
-                        Console.WriteLine($"[INFO] Successfully saved all entries for CompanyID: {companyId}.");
                     }
                     catch (Exception ex)
                     {
@@ -262,15 +258,15 @@ WHERE CompanyID = @CompanyID";
                         var entry = new FinancialDataEntry
                         {
                             CompanyID = reader.GetInt32(0),
-                            StartDate = reader.GetDateTime(1),
-                            EndDate = reader.GetDateTime(2),
+                            StartDate = reader.GetDateTime(1).Date, // Normalize to date-only
+                            EndDate = reader.GetDateTime(2).Date,   // Normalize to date-only
                             Quarter = reader.GetInt32(3),
                             IsHtmlParsed = reader.GetBoolean(4),
                             IsXbrlParsed = reader.GetBoolean(5),
                             FinancialValues = Data.ParseFinancialDataJson(reader.GetString(6)),
                             FiscalYearEndDate = null // Initialized as null
                         };
-                        if (entry.Quarter == 0)// Set FiscalYearEndDate for annual reports
+                        if (entry.Quarter == 0) // Set FiscalYearEndDate for annual reports
                         {
                             entry.FiscalYearEndDate = entry.EndDate;
                         }
@@ -280,6 +276,36 @@ WHERE CompanyID = @CompanyID";
             }
             return entries;
         }
+        public async Task CalculateAndSaveQ4Async(int companyId)
+        {
+            using (SqlConnection connection = new SqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                using (SqlTransaction transaction = connection.BeginTransaction())
+                {
+                    try
+                    {
+                        await Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, companyId, this);
+                        transaction.Commit();
+                        
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ERROR] Failed to insert Q4 data for CompanyID: {companyId}: {ex.Message}");
+                        try
+                        {
+                            transaction.Rollback();
+                            Console.WriteLine($"[INFO] Transaction rolled back for Q4 data of CompanyID: {companyId}.");
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            Console.WriteLine($"[ERROR] Transaction rollback failed for Q4 data of CompanyID: {companyId}: {rollbackEx.Message}");
+                        }
+                        throw;
+                    }
+                }
+            }
+        }
         public async Task<List<FinancialDataEntry>> GetCompletedEntriesAsync(int companyId)
         {
             var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
@@ -287,15 +313,16 @@ WHERE CompanyID = @CompanyID";
         }
         public Task AddParsedDataAsync(int companyId, FinancialDataEntry parsedData)
         {
+            // Just add to in-memory cache, no DB calls
             if (!companyFinancialDataCache.TryGetValue(companyId, out var companyData))
             {
-                // If not in cache, create a new CompanyFinancialData
                 companyData = new CompanyFinancialData(companyId);
                 companyFinancialDataCache[companyId] = companyData;
             }
-            companyData.AddOrUpdateEntry(parsedData); // Add to cache
+            companyData.AddOrUpdateEntry(parsedData);
             return Task.CompletedTask;
         }
+
 
 
         public CompanyFinancialData GetOrCreateCompanyFinancialData(int companyId)
@@ -492,68 +519,6 @@ WHERE CompanyID = @CompanyID";
             {  // For XBRL elements, return the element name as is
                 return elementName;
             }
-        }
-        private static decimal? GetFinancialValue(SqlConnection connection, SqlTransaction transaction, int companyId, int year, int quarter, string columnName)
-        {
-            string query = @"
-        SELECT FinancialDataJson
-        FROM FinancialData
-        WHERE CompanyID = @CompanyID AND Quarter = @Quarter
-          AND EndDate >= @FiscalYearStart AND EndDate <= @FiscalYearEnd";
-            DateTime fiscalYearStart, fiscalYearEnd;// Get the fiscal year start and end dates
-            GetFiscalYearStartEnd(companyId, year, connection, transaction, out fiscalYearStart, out fiscalYearEnd);
-            using (SqlCommand command = new SqlCommand(query, connection, transaction))
-            {
-                command.Parameters.AddWithValue("@CompanyID", companyId);
-                command.Parameters.AddWithValue("@Quarter", quarter);
-                command.Parameters.AddWithValue("@FiscalYearStart", fiscalYearStart);
-                command.Parameters.AddWithValue("@FiscalYearEnd", fiscalYearEnd);
-                using (SqlDataReader reader = command.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        string jsonData = reader.GetString(0);
-                        var financialData = ParseFinancialDataJson(jsonData);
-                        if (financialData.TryGetValue(columnName, out object valueObj))
-                        {
-                            if (decimal.TryParse(valueObj.ToString(), out decimal value))
-                            {
-                                return value;
-                            }
-                        }
-                    }
-                }
-            }
-            return null; // Return null if value is missing
-        }
-        private static void GetFiscalYearStartEnd(int companyId, int year, SqlConnection connection, SqlTransaction transaction, out DateTime fiscalYearStart, out DateTime fiscalYearEnd)
-        {
-            string query = @"
-        SELECT TOP 1 StartDate, EndDate
-        FROM FinancialData
-        WHERE CompanyID = @CompanyID AND Quarter = 0 AND YEAR(EndDate) = @Year
-        ORDER BY EndDate DESC";
-            using (SqlCommand command = new SqlCommand(query, connection, transaction))
-            {
-                command.Parameters.AddWithValue("@CompanyID", companyId);
-                command.Parameters.AddWithValue("@Year", year);
-                using (SqlDataReader reader = command.ExecuteReader())
-                {
-                    if (reader.Read())
-                    {
-                        fiscalYearStart = reader.GetDateTime(0);
-                        fiscalYearEnd = reader.GetDateTime(1);
-                        return;
-                    }
-                }
-            }    // Default to calendar year if no annual report is found
-            fiscalYearStart = new DateTime(year, 1, 1);
-            fiscalYearEnd = new DateTime(year, 12, 31);
-            Console.WriteLine($"[WARNING] No annual report found for Fiscal Year {year}. Defaulting to Calendar Year.");
-        }
-        private static decimal? GetNullableFinancialValue(SqlConnection connection, SqlTransaction transaction, int companyId, int year, int quarter, string columnName)
-        {  // Same implementation as GetFinancialValue
-            return GetFinancialValue(connection, transaction, companyId, year, quarter, columnName);
         }
         public static (DateTime periodStart, DateTime periodEnd) GetStandardPeriodDatesBasedOnCalendarYear(int fiscalYear, int quarter)
         {
@@ -868,7 +833,6 @@ WHERE CompanyID = @CompanyID
 
             return null; // Return null if value is missing
         }
-
         private static async Task<(DateTime fiscalYearStart, DateTime fiscalYearEnd)> GetFiscalYearStartEndAsync(
     int companyId,
     int year,
@@ -893,16 +857,16 @@ WHERE CompanyID = @CompanyID
                     {
                         if (await reader.ReadAsync())
                         {
-                            DateTime fiscalYearStart = reader.GetDateTime(0);
-                            DateTime fiscalYearEnd = reader.GetDateTime(1);
+                            DateTime fiscalYearStart = reader.GetDateTime(0).Date; // Normalize to date-only
+                            DateTime fiscalYearEnd = reader.GetDateTime(1).Date;   // Normalize to date-only
                             return (fiscalYearStart, fiscalYearEnd);
                         }
                         else
                         {
                             // Handle the case where no annual report is found
                             Console.WriteLine($"[WARNING] No annual report found for CompanyID: {companyId}, Year: {year}. Defaulting to calendar year.");
-                            DateTime defaultStart = new DateTime(year, 1, 1);
-                            DateTime defaultEnd = new DateTime(year, 12, 31);
+                            DateTime defaultStart = new DateTime(year, 1, 1); // Already date-only
+                            DateTime defaultEnd = new DateTime(year, 12, 31); // Already date-only
                             return (defaultStart, defaultEnd);
                         }
                     }
@@ -920,6 +884,7 @@ WHERE CompanyID = @CompanyID
             }
         }
 
+       
         private static async Task<decimal?> GetNullableFinancialValueAsync(
             SqlConnection connection,
             SqlTransaction transaction,
@@ -1054,22 +1019,13 @@ WHERE CompanyID = @CompanyID
                 try
                 {
                     await SaveCompleteEntryToDatabaseAsync(q4Entries, connection, transaction);
-                    Console.WriteLine($"[INFO] Successfully saved all Q4 entries for CompanyID: {companyId}.");
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[ERROR] Failed to insert Q4 data: {ex.Message}");
                 }
             }
-            else
-            {
-                Console.WriteLine($"[INFO] No Q4 entries to save for CompanyID: {companyId}.");
-            }
-
-            if (iteration >= maxIterations)
-            {
-                Console.WriteLine($"[WARNING] Reached maximum iterations ({maxIterations}) while calculating Q4 for CompanyID: {companyId}. Some fiscal years may not have been processed.");
-            }
+            
         }
 
         private static DateTime GetQuarterEndDateFromEntries(
@@ -1127,32 +1083,43 @@ WHERE CompanyID = @CompanyID
         {
             if (entries == null || !entries.Any()) return;
 
+            // Create a DataTable from entries
             DataTable table = CreateDataTable(entries);
 
             if (table.Rows.Count == 0)
             {
-                Console.WriteLine("[INFO] No new entries to insert.");
                 return;
             }
 
-            // Fetch existing entries to avoid duplicates
-            DataTable existingRows = FetchExistingRows(connection, transaction, entries.First().CompanyID, table, TimeSpan.FromDays(15));
+            // Extract entries to check for existing records
+            var entriesToCheck = entries.Select(e => new FinancialDataEntry
+            {
+                CompanyID = e.CompanyID,
+                StartDate = e.StartDate,
+                EndDate = e.EndDate,
+                Quarter = e.Quarter
+            }).ToList();
 
-            // Determine rows to insert (exclude existing ones)
-            var rowsToInsertEnumerable = table.AsEnumerable().Where(newRow =>
-                !existingRows.AsEnumerable().Any(existingRow =>
-                    existingRow.Field<int>("CompanyID") == newRow.Field<int>("CompanyID") &&
-                    existingRow.Field<DateTime>("StartDate") == newRow.Field<DateTime>("StartDate") &&
-                    existingRow.Field<DateTime>("EndDate") == newRow.Field<DateTime>("EndDate")));
+            // Fetch existing records using exact matches
+            DataTable existingRows = await FetchExistingRowsAsync(connection, transaction, entries.First().CompanyID, entriesToCheck);
+            // Create a hash set of existing keys for quick lookup
+            var existingKeys = new HashSet<(int CompanyID, DateTime StartDate, DateTime EndDate, int Quarter)>(
+                existingRows.AsEnumerable().Select(row => (
+                    row.Field<int>("CompanyID"),
+                    row.Field<DateTime>("StartDate").Date,
+                    row.Field<DateTime>("EndDate").Date,
+                    row.Field<int>("Quarter")
+                ))
+            );
 
-            DataTable rowsToInsert = null;
+            // Determine which entries are new and need to be inserted
+            var rowsToInsertEnumerable = entries.Where(e =>
+                !existingKeys.Contains((e.CompanyID, e.StartDate.Date, e.EndDate.Date, e.Quarter))
+            ).ToList();
             if (rowsToInsertEnumerable.Any())
             {
-                rowsToInsert = rowsToInsertEnumerable.CopyToDataTable();
-            }
+                DataTable rowsToInsert = CreateDataTable(rowsToInsertEnumerable);
 
-            if (rowsToInsert != null && rowsToInsert.Rows.Count > 0)
-            {
                 // Perform bulk insert for new rows
                 try
                 {
@@ -1164,13 +1131,11 @@ WHERE CompanyID = @CompanyID
                     throw;
                 }
             }
+          
 
             // Update existing records if necessary
             await UpdateExistingRecords(entries, connection, transaction, existingRows, TimeSpan.FromDays(15));
         }
-
-
-
 
         private static async Task BulkInsert(DataTable table, SqlConnection connection, SqlTransaction transaction)
         {
@@ -1266,36 +1231,55 @@ WHERE CompanyID = @CompanyID
                 }
             }
         }
-        public static DataTable FetchExistingRows(SqlConnection connection, SqlTransaction transaction, int companyId, DataTable newRows, TimeSpan leeway)
+        public static async Task<DataTable> FetchExistingRowsAsync(
+    SqlConnection connection,
+    SqlTransaction transaction,
+    int companyId,
+    List<FinancialDataEntry> newEntries)
+{
+    var existingRows = new DataTable();
+
+    if (newEntries == null || !newEntries.Any())
+        return existingRows;
+
+    // Create a DataTable matching the TVP structure with Quarter
+    var keyTable = new DataTable();
+    keyTable.Columns.Add("CompanyID", typeof(int));
+    keyTable.Columns.Add("StartDate", typeof(DateTime));
+    keyTable.Columns.Add("EndDate", typeof(DateTime));
+    keyTable.Columns.Add("Quarter", typeof(int)); // Include Quarter
+
+    foreach (var entry in newEntries)
+    {
+        keyTable.Rows.Add(entry.CompanyID, entry.StartDate.Date, entry.EndDate.Date, entry.Quarter);
+    }
+
+    string query = @"
+        SELECT fd.CompanyID, fd.StartDate, fd.EndDate, fd.Quarter
+        FROM FinancialData fd
+        INNER JOIN @Keys k
+            ON fd.CompanyID = k.CompanyID
+            AND fd.StartDate = k.StartDate
+            AND fd.EndDate = k.EndDate
+            AND fd.Quarter = k.Quarter";
+
+    using (SqlCommand command = new SqlCommand(query, connection, transaction))
+    {
+        var tvpParam = command.Parameters.AddWithValue("@Keys", keyTable);
+        tvpParam.SqlDbType = SqlDbType.Structured;
+        tvpParam.TypeName = "dbo.FinancialDataKeyType"; // Ensure your TVP includes Quarter
+
+        using (SqlDataAdapter adapter = new SqlDataAdapter(command))
         {
-            DataTable existingRows = new DataTable();
-            if (newRows.Rows.Count > 0)
-            {
-                DateTime minStartDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("StartDate")).Min().AddDays(-leeway.TotalDays);
-                DateTime maxStartDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("StartDate")).Max().AddDays(leeway.TotalDays);
-                DateTime minEndDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("EndDate")).Min().AddDays(-leeway.TotalDays);
-                DateTime maxEndDate = newRows.AsEnumerable().Select(row => row.Field<DateTime>("EndDate")).Max().AddDays(leeway.TotalDays);
-                string query = @"
-            SELECT CompanyID, StartDate, EndDate
-            FROM FinancialData
-            WHERE CompanyID = @CompanyID
-            AND StartDate BETWEEN @MinStartDate AND @MaxStartDate
-            AND EndDate BETWEEN @MinEndDate AND @MaxEndDate";
-                using (SqlCommand command = new SqlCommand(query, connection, transaction))
-                {
-                    command.Parameters.AddWithValue("@CompanyID", companyId);
-                    command.Parameters.AddWithValue("@MinStartDate", minStartDate);
-                    command.Parameters.AddWithValue("@MaxStartDate", maxStartDate);
-                    command.Parameters.AddWithValue("@MinEndDate", minEndDate);
-                    command.Parameters.AddWithValue("@MaxEndDate", maxEndDate);
-                    using (SqlDataAdapter adapter = new SqlDataAdapter(command))
-                    {
-                        adapter.Fill(existingRows);
-                    }
-                }
-            }
-            return existingRows;
+            await Task.Run(() => adapter.Fill(existingRows)); // Ensure asynchronous operation
         }
+    }
+
+    Console.WriteLine($"[INFO] Checked {newEntries.Count} records. Found {existingRows.Rows.Count} existing records.");
+
+    return existingRows;
+}
+
         public static DataTable CreateDataTable(List<FinancialDataEntry> entries)
         {
             DataTable table = new DataTable();
@@ -1308,7 +1292,7 @@ WHERE CompanyID = @CompanyID
             table.Columns.Add("IsHtmlParsed", typeof(bool));
             table.Columns.Add("IsXbrlParsed", typeof(bool));
 
-            var uniqueRows = new HashSet<(int CompanyID, DateTime StartDate, DateTime EndDate)>();
+            var uniqueRows = new HashSet<(int CompanyID, DateTime StartDate, DateTime EndDate, int Quarter)>();
 
             foreach (var entry in entries)
             {
@@ -1319,18 +1303,18 @@ WHERE CompanyID = @CompanyID
                     continue;
                 }
 
-                var uniqueKey = (entry.CompanyID, entry.StartDate, entry.EndDate);
+                var uniqueKey = (entry.CompanyID, entry.StartDate.Date, entry.EndDate.Date, entry.Quarter);
                 if (uniqueRows.Contains(uniqueKey))
                 {
-                    Console.WriteLine($"[INFO] Duplicate entry found for CompanyID: {entry.CompanyID}, StartDate: {entry.StartDate}, EndDate: {entry.EndDate}. Skipping.");
+                    Console.WriteLine($"[INFO] Duplicate entry found for CompanyID: {entry.CompanyID}, StartDate: {entry.StartDate.Date}, EndDate: {entry.EndDate.Date}, Quarter: {entry.Quarter}. Skipping.");
                     continue; // Skip duplicates
                 }
                 uniqueRows.Add(uniqueKey);
 
                 DataRow row = table.NewRow();
                 row["CompanyID"] = entry.CompanyID;
-                row["StartDate"] = entry.StartDate;
-                row["EndDate"] = entry.EndDate;
+                row["StartDate"] = entry.StartDate.Date; // Normalize to date-only
+                row["EndDate"] = entry.EndDate.Date;     // Normalize to date-only
                 row["Quarter"] = entry.Quarter;
                 row["Year"] = entry.Year;
                 row["FinancialDataJson"] = JsonConvert.SerializeObject(entry.FinancialValues);
@@ -1341,6 +1325,7 @@ WHERE CompanyID = @CompanyID
 
             return table;
         }
+
 
         public static DateTime GetFiscalYearEndForSpecificYearWithFallback(int companyId, int year, SqlConnection connection, SqlTransaction transaction)
         {

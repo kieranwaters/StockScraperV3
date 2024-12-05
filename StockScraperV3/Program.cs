@@ -142,12 +142,9 @@ namespace Nasdaq100FinancialScraper
                                 if (completedEntries.Count > 0) // No need for Count() if List<T>
                                 {
                                     await dataNonStatic.SaveEntriesToDatabaseAsync(companyId, completedEntries);
-                                    Console.WriteLine($"Successfully saved {completedEntries.Count} financial entries for {companyName} ({companySymbol}).");
+                               
                                 }
-                                else
-                                {
-                                    Console.WriteLine($"[INFO] No completed entries to save for {companyName} ({companySymbol}).");
-                                }         
+                                         
                                 if (localBatchedCommands.Any())// Execute any batched SQL commands within the transaction (if necessary)
                             {
                                     await Data.Data.ExecuteBatch(localBatchedCommands, connectionString);

@@ -260,12 +260,11 @@ namespace StockScraperV3
             if (completedEntries.Count > 0)
             {
                 await dataNonStatic.SaveEntriesToDatabaseAsync(companyId, completedEntries);
-                Console.WriteLine($"[INFO] Saved {completedEntries.Count} entries for {companyName} ({companySymbol}).");
             }
-            else
-            {
-                Console.WriteLine($"[INFO] No completed entries to save for {companyName} ({companySymbol}).");
-            }
+
+
+            // **Removed Q4 calculation from here to prevent duplicate entries**
+            // await dataNonStatic.CalculateAndSaveQ4Async(companyId);
         }
 
         private static async Task ProcessFilingAsync((string url, string description) filing, (int companyId, string companyName, string symbol, int cik) localCompany, ChromeDriverPool driverPool, DataNonStatic dataNonStatic)
@@ -378,22 +377,46 @@ namespace StockScraperV3
                 await Task.WhenAll(chromeDriverTasks);
 
                 // Save completed initial entries (Q1, Q2, Q3, Annual Reports) to the database
+                // ... After processing ALL filings for a company:
                 var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(localCompany.companyId);
-                if (completedEntries.Count > 0)
+                if (completedEntries.Any())
                 {
-                    try
-                    {
-                        await dataNonStatic.SaveEntriesToDatabaseAsync(localCompany.companyId, completedEntries);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ERROR] Failed to save entries for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
-                    }
+                    // Perform a single bulk save now that all regular entries are parsed
+                    await dataNonStatic.SaveAllEntriesToDatabaseAsync(localCompany.companyId);
                 }
                 else
                 {
                     Console.WriteLine($"[INFO] No completed entries to save for {localCompany.companyName} ({localCompany.symbol}).");
                 }
+
+                // Now run Q4 calculations and save them at the end:
+                using (SqlConnection connection = new SqlConnection(connectionString))
+                {
+                    await connection.OpenAsync();
+                    using (SqlTransaction transaction = connection.BeginTransaction())
+                    {
+                        try
+                        {
+                            // Q4 calculations and save all Q4 entries at once
+                            await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic);
+                            transaction.Commit();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[ERROR] Transaction failed for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
+                            try
+                            {
+                                transaction.Rollback();
+                                Console.WriteLine($"Transaction rolled back for {localCompany.companyName} ({localCompany.symbol}).");
+                            }
+                            catch (Exception rollbackEx)
+                            {
+                                Console.WriteLine($"[ERROR] Rollback failed for {localCompany.companyName} ({localCompany.symbol}): {rollbackEx.Message}");
+                            }
+                        }
+                    }
+                }
+
 
                 // Now calculate and save Q4 entries
                 using (SqlConnection connection = new SqlConnection(connectionString))
