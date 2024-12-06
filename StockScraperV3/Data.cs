@@ -273,36 +273,6 @@ WHERE CompanyID = @CompanyID";
             }
             return entries;
         }
-        public async Task CalculateAndSaveQ4Async(int companyId)
-        {
-            using (SqlConnection connection = new SqlConnection(connectionString))
-            {
-                await connection.OpenAsync();
-                using (SqlTransaction transaction = connection.BeginTransaction())
-                {
-                    try
-                    {
-                        await Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, companyId, this);
-                        transaction.Commit();
-                        
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[ERROR] Failed to insert Q4 data for CompanyID: {companyId}: {ex.Message}");
-                        try
-                        {
-                            transaction.Rollback();
-                            Console.WriteLine($"[INFO] Transaction rolled back for Q4 data of CompanyID: {companyId}.");
-                        }
-                        catch (Exception rollbackEx)
-                        {
-                            Console.WriteLine($"[ERROR] Transaction rollback failed for Q4 data of CompanyID: {companyId}: {rollbackEx.Message}");
-                        }
-                        throw;
-                    }
-                }
-            }
-        }
         public async Task<List<FinancialDataEntry>> GetCompletedEntriesAsync(int companyId)
         {
             var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
@@ -538,45 +508,6 @@ WHERE CompanyID = @CompanyID";
             }
             return (periodStart, periodEnd);
         }
-        private static async Task<DateTime> GetQuarterEndDateAsync(SqlConnection connection, SqlTransaction transaction, int companyId, int year, int quarter)
-        {
-            string query = @"
-SELECT EndDate
-FROM FinancialData
-WHERE CompanyID = @CompanyID 
-  AND YEAR(EndDate) = @Year 
-  AND Quarter = @Quarter"; // Ensure 'Quarter' column exists
-
-            using (SqlCommand command = new SqlCommand(query, connection, transaction))
-            {    // Add parameters with correct names
-                command.Parameters.AddWithValue("@CompanyID", companyId);
-                command.Parameters.AddWithValue("@Year", year);
-                command.Parameters.AddWithValue("@Quarter", quarter);
-                try
-                {
-                    object result = await command.ExecuteScalarAsync();
-
-                    if (result != null && DateTime.TryParse(result.ToString(), out DateTime endDate))
-                    {
-                        return endDate;
-                    }
-                    else
-                    {
-                        return DateTime.MinValue;
-                    }
-                }
-                catch (SqlException sqlEx)
-                {
-                    Console.WriteLine($"[SQL ERROR] GetQuarterEndDateAsync: {sqlEx.Message}");
-                    throw; // Re-throw to handle upstream
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[ERROR] GetQuarterEndDateAsync: {ex.Message}");
-                    throw; // Re-throw to handle upstream
-                }
-            }
-        }
         private static List<string> GetAllFinancialElementsFromEntries(List<FinancialDataEntry> financialEntries, int year)
         {
             var elementNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -586,32 +517,6 @@ WHERE CompanyID = @CompanyID
                 foreach (var key in entry.FinancialValues.Keys)
                 {
                     elementNames.Add(key);
-                }
-            }
-            return elementNames.ToList();
-        }
-        private static async Task<List<string>> GetAllFinancialElementsAsync(SqlConnection connection, SqlTransaction transaction, int companyId, int year)
-        {
-            var elementNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string query = @"
-SELECT FinancialDataJson
-FROM FinancialData
-WHERE CompanyID = @CompanyID AND YEAR(EndDate) = @Year";
-            using (SqlCommand command = new SqlCommand(query, connection, transaction))
-            {
-                command.Parameters.AddWithValue("@CompanyID", companyId);
-                command.Parameters.AddWithValue("@Year", year);
-                using (SqlDataReader reader = await command.ExecuteReaderAsync())
-                {
-                    while (await reader.ReadAsync())
-                    {
-                        string jsonData = reader.GetString(0);
-                        var financialData = ParseFinancialDataJson(jsonData);
-                        foreach (var key in financialData.Keys)
-                        {
-                            elementNames.Add(key);
-                        }
-                    }
                 }
             }
             return elementNames.ToList();
@@ -812,28 +717,6 @@ WHERE CompanyID = @CompanyID
                 }
             }
         }      
-        private static async Task<decimal?> GetNullableFinancialValueAsync(SqlConnection connection, SqlTransaction transaction, int companyId, int year, int quarter, string elementName)
-        {    // Reuse GetFinancialValueAsync as they perform the same operation
-            return await GetFinancialValueAsync(connection, transaction, companyId, year, quarter, elementName);
-        }
-        private static async Task InsertQ4DataAsync(SqlConnection connection, SqlTransaction transaction, int companyId, int year, DateTime startDate, DateTime endDate, Dictionary<string, object> q4Values)
-        { // Calculate fiscal year based on endDate and quarter
-            int fiscalYear = CompanyFinancialData.GetFiscalYear(endDate, 4, (DateTime?)endDate);
-            (DateTime standardStartDate, DateTime standardEndDate) = Data.GetStandardPeriodDates(fiscalYear, 4, (DateTime?)endDate);
-            var q4Entry = new FinancialDataEntry
-            {
-                CompanyID = companyId,
-                StartDate = startDate, // Parsed StartDate
-                EndDate = endDate,     // Parsed EndDate
-                Quarter = 4,
-                Year = fiscalYear,     // **Explicitly set Year**
-                IsHtmlParsed = true,
-                IsXbrlParsed = true,
-                FinancialValues = q4Values
-            };
-            var entries = new List<FinancialDataEntry> { q4Entry };
-            await SaveCompleteEntryToDatabaseAsync(entries, connection, transaction);
-        }
         public static async Task CalculateAndSaveQ4InDatabaseAsync(SqlConnection connection, SqlTransaction transaction, int companyId, DataNonStatic dataNonStatic)
         {
             var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
