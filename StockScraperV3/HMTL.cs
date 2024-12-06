@@ -28,7 +28,7 @@ namespace HTML
         private static string ConstructHtmlElementName(int quarter, int year, string statementType, string elementLabel)
         {
             string sanitizedStatementType = Regex.Replace(statementType, @"[\s:()]", "");
-            string sanitizedElementLabel = Regex.Replace(elementLabel, @"[\s:()]", "");
+            string sanitizedElementLabel = Regex.Replace(elementLabel, @"[:()]", "");
             sanitizedElementLabel = sanitizedElementLabel.Replace(":", "");
             return $"HTML_Q{quarter}Report{year}_{sanitizedStatementType}_{sanitizedElementLabel}";
         }
@@ -87,103 +87,8 @@ namespace HTML
             var closestQuarterEnd = quarterEnds.OrderBy(q => Math.Abs((q - date).TotalDays)).First();
             return closestQuarterEnd;
         }
-        //public static async Task ProcessInteractiveData(ChromeDriver driver, string interactiveDataUrl, string companyName, string companySymbol, bool isAnnualReport, string filingUrl, int companyId, DataNonStatic dataNonStatic)
-        //{
-        //    var parsedEntries = new List<FinancialDataEntry>(); // List to accumulate parsed entries
-        //    await driverSemaphore.WaitAsync();
-        //    try
-        //    {
-        //        var dataTimer = Stopwatch.StartNew();
-        //        bool loadedSuccessfully = false;
-        //        int retries = 0;
-        //        const int maxRetries = 3;
-        //        const int retryDelay = 5000;
-        //        while (!loadedSuccessfully && retries < maxRetries)
-        //        {
-        //            try
-        //            {
-        //                driver.Navigate().GoToUrl(interactiveDataUrl);
-        //                var wait = new WebDriverWait(driver, TimeSpan.FromSeconds(10));
-        //                wait.Until(d => ((IJavaScriptExecutor)d).ExecuteScript("return document.readyState").Equals("complete"));
-        //                loadedSuccessfully = true;
-        //                await Task.Delay(1000);  // Small delay to ensure page content is fully loaded
-        //                var financialStatementButtons = driver.FindElements(By.XPath("//a[starts-with(@id, 'menu_cat') and contains(text(), 'Financial Statements') and not(contains(text(), 'Notes'))]"));
-        //                bool isFirstReport = true;
-        //                foreach (var financialStatementsButton in financialStatementButtons)
-        //                {
-        //                    try
-        //                    {
-        //                        ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", financialStatementsButton);
-        //                        await Task.Delay(300);
-        //                        ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", financialStatementsButton);
-        //                        await Task.Delay(400);
-        //                        var accordionElements = driver.FindElements(By.XPath("//ul[@style='display: block;']//li[contains(@class, 'accordion')]//a[contains(@class, 'xbrlviewer')]"));
-        //                        if (accordionElements.Count == 0)
-        //                        {
-        //                            continue;
-        //                        }
-        //                        foreach (var accordionElement in accordionElements)
-        //                        {
-        //                            try
-        //                            { // Extract the statement name from the button text
-        //                                string statementName = accordionElement.Text.Trim();
-        //                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView(true);", accordionElement);
-        //                                await Task.Delay(400);
-        //                                ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", accordionElement);
-        //                                await Task.Delay(400);
-        //                                var reportElement = wait.Until(ExpectedConditions.ElementIsVisible(By.XPath("//table[contains(@class, 'report')]")));
-        //                                string reportHtml = reportElement.GetAttribute("outerHTML");
-        //                                var parsedHtmlElements = await ParseHtmlForElementsOfInterest(reportHtml, isAnnualReport, companyName, companySymbol, companyId, dataNonStatic, statementName);
-        //                                if (parsedHtmlElements.Count == 0)
-        //                                {
-        //                                    continue;
-        //                                }
-        //                            }
-        //                            catch (Exception ex)
-        //                            {
-        //                                Console.WriteLine($"[ERROR] Exception during parsing HTML for {companyName} ({companySymbol}): {ex.Message}");
-        //                            }
-        //                        }
-        //                    }
-        //                    catch (Exception ex)
-        //                    {
-        //                        Console.WriteLine($"[ERROR] Exception clicking financial statement button for {companyName} ({companySymbol}): {ex.Message}");
-        //                    }
-        //                }
-        //            }
-        //            catch (WebDriverTimeoutException ex)
-        //            {
-        //                retries++;
-        //                Console.WriteLine($"[ERROR] Timeout loading interactive data (retry {retries}/{maxRetries}) for {companyName} ({companySymbol}): {ex.Message}");
-        //                if (retries >= maxRetries)
-        //                {
-        //                    Console.WriteLine($"[ERROR] Failed to load interactive data after maximum retries for {companyName} ({companySymbol}).");
-        //                }
-        //                else
-        //                {
-        //                    await Task.Delay(retryDelay);
-        //                }
-        //            }
-        //        }
-
-        //        dataTimer.Stop();
-        //    }
-        //    finally
-        //    {
-        //        driverSemaphore.Release(); // Release the driver slot
-        //    }
-        //}
-        public static async Task ProcessInteractiveData(
-    ChromeDriver driver,
-    string interactiveDataUrl,
-    string companyName,
-    string companySymbol,
-    bool isAnnualReport,
-    string filingUrl,
-    int companyId,
-    DataNonStatic dataNonStatic)
-        {
-            // Removed parsedEntries as it's no longer needed
+        public static async Task ProcessInteractiveData(ChromeDriver driver, string interactiveDataUrl, string companyName, string companySymbol, bool isAnnualReport, string filingUrl, int companyId, DataNonStatic dataNonStatic)
+        { // Removed parsedEntries as it's no longer needed
             await driverSemaphore.WaitAsync();
             try
             {
