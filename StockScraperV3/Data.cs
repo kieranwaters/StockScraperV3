@@ -452,6 +452,7 @@ WHERE CompanyID = @CompanyID";
                 return elementName;
             }
         }
+
         private static string AdjustElementNameForQuarter(string elementName, int quarter)
         {
             if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
@@ -526,9 +527,9 @@ WHERE CompanyID = @CompanyID";
             return elementNames.ToList();
         }
         private static (string compositeName, decimal? value) ExtractBaseName(
-        string elementName,
-        Dictionary<int, FinancialDataEntry> entriesByQuarter,
-        int quarter)
+    string elementName,
+    Dictionary<int, FinancialDataEntry> entriesByQuarter,
+    int quarter)
         {
             // Check if the element is an HTML element
             if (!elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
@@ -537,7 +538,7 @@ WHERE CompanyID = @CompanyID";
                 return (null, null);
             }
 
-            // In the updated logic, compositeName should include the full adjusted elementName
+            // Retain the full elementName as the compositeName
             string compositeName = elementName.Trim();
             Console.WriteLine($"[ExtractBaseName] '{elementName}' -> '{compositeName}'");
 
@@ -569,12 +570,13 @@ WHERE CompanyID = @CompanyID";
 
             return (compositeName, retrievedValue);
         }
+
         private static async Task ProcessAllFinancialElementsAsync(
-        int companyId,
-        int year,
-        Dictionary<string, object> q4Values,
-        List<string> elementNames,
-        List<FinancialDataEntry> financialEntries)
+    int companyId,
+    int year,
+    Dictionary<string, object> q4Values,
+    List<string> elementNames,
+    List<FinancialDataEntry> financialEntries)
         {
             Console.WriteLine($"[ProcessAllFinancialElementsAsync] Start processing for CompanyID: {companyId}, Year: {year}");
             Console.WriteLine($"[ProcessAllFinancialElementsAsync] Total elements to process: {elementNames.Count}");
@@ -621,23 +623,31 @@ WHERE CompanyID = @CompanyID";
                 if (annualValue.HasValue)
                 {
                     string statementType = GetStatementType(elementName);
-                    bool isBalanceSheet = statementType.Equals("Balance Sheet", StringComparison.OrdinalIgnoreCase);
+                    bool isBalanceSheet = statementType.Equals("balancesheets", StringComparison.OrdinalIgnoreCase);
+                    bool isCashFlow = statementType.Equals("cashflows", StringComparison.OrdinalIgnoreCase);
 
-                    decimal? q4Value;
-                    if (isBalanceSheet && !statementType.Equals("Other", StringComparison.OrdinalIgnoreCase))
+                    decimal? q4Value = null;
+
+                    if (isBalanceSheet)
                     {
                         // For Balance Sheet items, Q4 = Annual value
                         q4Value = annualValue.Value;
                         Console.WriteLine($"[Q4 Calculation] Balance Sheet - Q4 = Annual ({q4Value}) for '{baseAnnualName}'");
                     }
+                    else if (isCashFlow)
+                    {
+                        // For Cashflow items, Q4 = Annual value - Q3
+                        decimal q3Val = q3Value.GetValueOrDefault();
+                        q4Value = annualValue.Value - q3Val;
+                        Console.WriteLine($"[Q4 Calculation] Cashflow - Q4 = Annual ({annualValue.Value}) - Q3 ({q3Val}) = {q4Value} for '{baseAnnualName}'");
+                    }
                     else
                     {
-                        // For other statements, Q4 = Annual - (Q1 + Q2 + Q3)
+                        // For other statement types, default to Annual - (Q1 + Q2 + Q3)
                         decimal q1Val = q1Value.GetValueOrDefault();
                         decimal q2Val = q2Value.GetValueOrDefault();
                         decimal q3Val = q3Value.GetValueOrDefault();
                         q4Value = annualValue.Value - (q1Val + q2Val + q3Val);
-
                         Console.WriteLine($"[Q4 Calculation] {statementType} - Q4 = Annual ({annualValue.Value}) - (Q1 ({q1Val}) + Q2 ({q2Val}) + Q3 ({q3Val})) = {q4Value} for '{baseAnnualName}'");
                     }
 
@@ -688,6 +698,7 @@ WHERE CompanyID = @CompanyID";
 
             Console.WriteLine($"[ProcessAllFinancialElementsAsync] Completed processing for CompanyID: {companyId}, Year: {year}");
         }
+
 
         private static decimal? GetFinancialValueFromEntries(Dictionary<int, FinancialDataEntry> entriesByQuarter, int quarter, string compositeBaseName)
         {
