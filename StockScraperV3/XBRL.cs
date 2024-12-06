@@ -634,14 +634,14 @@ namespace XBRL
             {
                 return XDocument.Parse(content);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 content = CleanXbrlContent(content);
                 try
                 {
                     return XDocument.Parse(content);
                 }
-                catch (Exception retryEx)
+                catch (Exception)
                 {
                     return null;
                 }
@@ -743,7 +743,7 @@ namespace XBRL
                     string txtContent = await HttpClientProvider.Client.GetStringAsync(filingUrl);
                     return ExtractEmbeddedXbrlFromTxt(txtContent);
                 }
-                catch (HttpRequestException ex) when (attempt < maxRetries)
+                catch (HttpRequestException ) when (attempt < maxRetries)
                 {
                     await Task.Delay(delay);
                     delay *= 2; // Exponential backoff

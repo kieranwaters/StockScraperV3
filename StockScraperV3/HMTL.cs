@@ -241,7 +241,7 @@ namespace HTML
                     DateTime? fiscalYearEndDate = ExtractDateFromThTags(table); // Extract fiscal year end date from the table headers
                     if (!fiscalYearEndDate.HasValue)
                     {
- 
+
                         continue;
                     }
 
@@ -249,7 +249,7 @@ namespace HTML
                     DateTime adjustedFiscalYearEndDate = isAnnualReport
                        ? fiscalYearEndDate.Value // Do not adjust for annual reports
                        : Data.Data.AdjustToNearestQuarterEndDate(fiscalYearEndDate.Value); // Adjust for quarterly reports
-                   
+
                     // Step 3: Determine Fiscal Year and Quarter
                     int fiscalYear;
                     int quarter;
@@ -261,7 +261,7 @@ namespace HTML
                         quarter = 0;
                         fiscalYear = adjustedFiscalYearEndDate.Year;
                         fiscalYearEndDateFinal = adjustedFiscalYearEndDate;
-                        
+
                     }
                     else
                     {
@@ -270,7 +270,7 @@ namespace HTML
                         fiscalYear = determinedFiscalYear;
                         quarter = determinedQuarter;
                         fiscalYearEndDateFinal = determinedFiscalYearEndDate;
-         
+
                     }
 
                     // Step 4: Calculate Report Start and End Dates Based on Fiscal Year and Quarter
@@ -332,7 +332,7 @@ namespace HTML
 
                     // Step 6: Extract Scaling Factors
                     var (sharesMultiplier, dollarMultiplier) = ExtractScalingFactor(htmlDocument);
- 
+
                     // Step 7: Process the Data Rows
                     foreach (var row in rows)
                     {
@@ -370,11 +370,11 @@ namespace HTML
                         parsedData.Quarter = 0;
                         parsedData.Year = fiscalYear; // Set Year to the year of EndDate
                     }
-              
+
 
                     // Step 9: Add the fully populated FinancialDataEntry to dataNonStatic
                     await dataNonStatic.AddParsedDataAsync(companyId, parsedData);
-                    
+
                 }
             }
             catch (Exception ex)

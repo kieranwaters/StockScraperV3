@@ -539,7 +539,7 @@ namespace StockScraperV3
                 }
                 return null;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 return null;
             }
