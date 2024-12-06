@@ -452,45 +452,10 @@ WHERE CompanyID = @CompanyID";
                 return elementName;
             }
         }
-
-
-        //private static string AdjustElementNameForQuarter(string elementName, int quarter)
-        //{
-        //    if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
-        //    {
-        //        if (elementName.Contains("AnnualReport"))
-        //        {
-        //            // AnnualReportYYYY_ -> QxReportYYYY_
-        //            // Pattern: HTML_AnnualReport(\d{4}_) matches AnnualReport + year + underscore
-        //            // Replacement: HTML_Q{quarter}Report + same year
-        //            string patternAnnual = @"^(HTML_AnnualReport)(\d{4}_)";
-        //            string replacementAnnual = $"HTML_Q{quarter}Report$2";
-        //            return Regex.Replace(elementName, patternAnnual, replacementAnnual, RegexOptions.IgnoreCase);
-        //        }
-        //        else
-        //        {
-        //            // Q0ReportYYYY_ -> Q{quarter}ReportYYYY_
-        //            // Pattern: HTML_Q(\d)Report(\d{4}_)
-        //            // Group 2 is the quarter digit, Group 4 is the year and underscore
-        //            string patternQ = @"^(HTML_Q)\d(Report)(\d{4}_)";
-        //            string replacementQ = $"HTML_Q{quarter}Report$3";
-        //            return Regex.Replace(elementName, patternQ, replacementQ, RegexOptions.IgnoreCase);
-        //        }
-        //    }
-        //    else
-        //    {
-        //        return elementName;
-        //    }
-        //}
         private static string AdjustElementNameForQuarter(string elementName, int quarter)
         {
             if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
-            {
-                // Replace Q0ReportYYYY_ or QxReportYYYY_ with the appropriate quarter report
-                // Pattern explanation:
-                // ^HTML_Q\dReport(\d{4}_) captures:
-                // - ^HTML_Q followed by a digit (Q0, Q1, etc.)
-                // - Report followed by exactly 4 digits (year) and an underscore
+            {               
                 string pattern = @"^(HTML_Q)\d(Report)(\d{4}_)";
                 string replacement = $"HTML_Q{quarter}Report$3";
                 return Regex.Replace(elementName, pattern, replacement, RegexOptions.IgnoreCase);
@@ -517,8 +482,6 @@ WHERE CompanyID = @CompanyID";
                 return elementName;
             }
         }
-
-
         public static (DateTime periodStart, DateTime periodEnd) GetStandardPeriodDatesBasedOnCalendarYear(int fiscalYear, int quarter)
         {
             DateTime periodStart, periodEnd;
@@ -562,72 +525,6 @@ WHERE CompanyID = @CompanyID";
             }
             return elementNames.ToList();
         }
-        //    private static (string compositeName, decimal? value) ExtractBaseName(
-        //string elementName,
-        //Dictionary<int, FinancialDataEntry> entriesByQuarter,
-        //int quarter)
-        //    {
-        //        // Check if the element is an HTML element
-        //        if (!elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
-        //        {
-        //            // Do not log anything for non-HTML elements
-        //            return (null, null);
-        //        }
-
-        //        int lastUnderscore = elementName.LastIndexOf('_');
-        //        string compositeName;
-
-        //        if (lastUnderscore >= 0 && lastUnderscore < elementName.Length - 1)
-        //        {
-        //            // Extract the base name after the last underscore
-        //            string baseName = elementName.Substring(lastUnderscore + 1).Trim();
-
-        //            // Extract the section name by finding the second last underscore
-        //            int secondLastUnderscore = elementName.LastIndexOf('_', lastUnderscore - 1);
-        //            string sectionName = "UnknownSection";
-        //            if (secondLastUnderscore >= 0 && secondLastUnderscore < lastUnderscore)
-        //            {
-        //                sectionName = elementName.Substring(secondLastUnderscore + 1, lastUnderscore - secondLastUnderscore - 1).Trim();
-        //            }
-
-        //            // Combine section and base name to form a unique key
-        //            compositeName = $"{sectionName}_{baseName}";
-        //            Console.WriteLine($"[ExtractBaseName] '{elementName}' -> '{compositeName}'");
-        //        }
-        //        else
-        //        {
-        //            compositeName = elementName.Trim();
-        //            Console.WriteLine($"[ExtractBaseName] '{elementName}' -> '{compositeName}'");
-        //        }
-
-        //        // Now retrieve the value associated with the original elementName from the specified quarter
-        //        decimal? retrievedValue = null;
-        //        if (entriesByQuarter.TryGetValue(quarter, out var entry) && entry != null)
-        //        {
-        //            if (entry.FinancialValues.TryGetValue(elementName, out var valueObj))
-        //            {
-        //                if (decimal.TryParse(valueObj.ToString(), out decimal val))
-        //                {
-        //                    retrievedValue = val;
-        //                    Console.WriteLine($"[ExtractBaseName] Found value {val} for '{elementName}' in Quarter {quarter}");
-        //                }
-        //                else
-        //                {
-        //                    Console.WriteLine($"[ExtractBaseName] Failed to parse value for '{elementName}' in Quarter {quarter}");
-        //                }
-        //            }
-        //            else
-        //            {
-        //                Console.WriteLine($"[ExtractBaseName] '{elementName}' not found in Quarter {quarter}");
-        //            }
-        //        }
-        //        else
-        //        {
-        //            Console.WriteLine($"[ExtractBaseName] Quarter {quarter} not available for '{elementName}'");
-        //        }
-
-        //        return (compositeName, retrievedValue);
-        //    }
         private static (string compositeName, decimal? value) ExtractBaseName(
         string elementName,
         Dictionary<int, FinancialDataEntry> entriesByQuarter,
@@ -672,127 +569,6 @@ WHERE CompanyID = @CompanyID";
 
             return (compositeName, retrievedValue);
         }
-
-
-        //    private static async Task ProcessAllFinancialElementsAsync(
-        //int companyId,
-        //int year,
-        //Dictionary<string, object> q4Values,
-        //List<string> elementNames,
-        //List<FinancialDataEntry> financialEntries)
-        //    {
-        //        Console.WriteLine($"[ProcessAllFinancialElementsAsync] Start processing for CompanyID: {companyId}, Year: {year}");
-        //        Console.WriteLine($"[ProcessAllFinancialElementsAsync] Total elements to process: {elementNames.Count}");
-
-        //        // Group financial entries by Quarter for quick access
-        //        var entriesByQuarter = financialEntries
-        //            .Where(entry => entry.Year == year)
-        //            .GroupBy(entry => entry.Quarter)
-        //            .ToDictionary(g => g.Key, g => g.FirstOrDefault());
-
-        //        Console.WriteLine($"[ProcessAllFinancialElementsAsync] Entries grouped by Quarter: {entriesByQuarter.Count}");
-
-        //        // Use a thread-safe dictionary to store Q4 values when processing in parallel
-        //        var q4ValuesConcurrent = new ConcurrentDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-
-        //        Parallel.ForEach(elementNames, elementName =>
-        //        {
-        //            Console.WriteLine($"[Parallel.ForEach] Processing ElementName: '{elementName}'");
-
-        //            // Adjust the element name for annual and quarterly value retrieval
-        //            string annualElementName = AdjustElementNameForAnnual(elementName);
-        //            string q1ElementName = AdjustElementNameForQuarter(elementName, 1);
-        //            string q2ElementName = AdjustElementNameForQuarter(elementName, 2);
-        //            string q3ElementName = AdjustElementNameForQuarter(elementName, 3);
-
-        //            Console.WriteLine($"[Element Adjustment] Annual: '{annualElementName}', Q1: '{q1ElementName}', Q2: '{q2ElementName}', Q3: '{q3ElementName}'");
-
-        //            // Extract names and values for annual and quarters
-        //            var (baseAnnualName, annualValue) = ExtractBaseName(annualElementName, entriesByQuarter, 0);
-        //            var (baseQ1Name, q1Value) = ExtractBaseName(q1ElementName, entriesByQuarter, 1);
-        //            var (baseQ2Name, q2Value) = ExtractBaseName(q2ElementName, entriesByQuarter, 2);
-        //            var (baseQ3Name, q3Value) = ExtractBaseName(q3ElementName, entriesByQuarter, 3);
-
-        //            // If the annualElementName is not an HTML element, skip processing
-        //            if (baseAnnualName == null)
-        //            {
-        //                Console.WriteLine($"[ProcessAllFinancialElementsAsync] Skipping non-HTML ElementName: '{elementName}'");
-        //                return;
-        //            }
-
-        //            Console.WriteLine($"[Base Names] Annual: '{baseAnnualName}', Q1: '{baseQ1Name}', Q2: '{baseQ2Name}', Q3: '{baseQ3Name}'");
-        //            Console.WriteLine($"[Retrieved Values] Annual: {(annualValue.HasValue ? annualValue.ToString() : "null")}, Q1: {(q1Value.HasValue ? q1Value.ToString() : "null")}, Q2: {(q2Value.HasValue ? q2Value.ToString() : "null")}, Q3: {(q3Value.HasValue ? q3Value.ToString() : "null")}");
-
-        //            if (annualValue.HasValue)
-        //            {
-        //                string statementType = GetStatementType(elementName);
-        //                bool isBalanceSheet = statementType.Equals("Balance Sheet", StringComparison.OrdinalIgnoreCase);
-
-        //                decimal? q4Value;
-        //                if (isBalanceSheet && !statementType.Equals("Other", StringComparison.OrdinalIgnoreCase))
-        //                {
-        //                    // For Balance Sheet items, Q4 = Annual value
-        //                    q4Value = annualValue.Value;
-        //                    Console.WriteLine($"[Q4 Calculation] Balance Sheet - Q4 = Annual ({q4Value}) for '{baseAnnualName}'");
-        //                }
-        //                else
-        //                {
-        //                    // For other statements, Q4 = Annual - (Q1 + Q2 + Q3)
-        //                    decimal q1Val = q1Value.GetValueOrDefault();
-        //                    decimal q2Val = q2Value.GetValueOrDefault();
-        //                    decimal q3Val = q3Value.GetValueOrDefault();
-        //                    q4Value = annualValue.Value - (q1Val + q2Val + q3Val);
-
-        //                    Console.WriteLine($"[Q4 Calculation] {statementType} - Q4 = Annual ({annualValue.Value}) - (Q1 ({q1Val}) + Q2 ({q2Val}) + Q3 ({q3Val})) = {q4Value} for '{baseAnnualName}'");
-        //                }
-
-        //                // Adjust the element name for Q4 and extract its base name (to store Q4 result)
-        //                string q4ElementName = AdjustElementNameForQ4(elementName);
-        //                var (baseQ4Name, _) = ExtractBaseName(q4ElementName, entriesByQuarter, 4); // For Q4, just get the name; value might not exist, so ignore
-
-        //                // If q4ElementName is not an HTML element, skip assigning Q4 value
-        //                if (baseQ4Name == null)
-        //                {
-        //                    Console.WriteLine($"[ProcessAllFinancialElementsAsync] Skipping Q4 ElementName: '{q4ElementName}' as it is not an HTML element");
-        //                    return;
-        //                }
-
-        //                Console.WriteLine($"[Q4 Element Adjustment] Q4 ElementName: '{q4ElementName}', Base Q4 Name: '{baseQ4Name}'");
-
-        //                // Assign the Q4 value using the composite Q4 name
-        //                if (!q4ValuesConcurrent.TryAdd(baseQ4Name, q4Value))
-        //                {
-        //                    Console.WriteLine($"[Warning] Duplicate Q4 key '{baseQ4Name}' detected. Overwriting existing value.");
-        //                    q4ValuesConcurrent[baseQ4Name] = q4Value;
-        //                }
-        //                else
-        //                {
-        //                    Console.WriteLine($"[Added Q4 Value] Key: '{baseQ4Name}', Value: {q4Value}");
-        //                }
-        //            }
-        //            else
-        //            {
-        //                Console.WriteLine($"[Skipped Q4 Calculation] No annual value for ElementName: '{elementName}' with BaseName: '{baseAnnualName}'");
-        //            }
-        //        });
-
-        //        Console.WriteLine($"[Merging] Merging Q4 values from concurrent dictionary into main dictionary.");
-
-        //        // Merge the concurrent dictionary into the main q4Values dictionary
-        //        foreach (var kvp in q4ValuesConcurrent)
-        //        {
-        //            if (q4Values.ContainsKey(kvp.Key))
-        //            {
-        //                Console.WriteLine($"[Error] Duplicate key '{kvp.Key}' found in q4Values. Cannot add duplicate keys.");
-        //                throw new ArgumentException($"An item with the same key has already been added. Key: {kvp.Key}");
-        //            }
-
-        //            q4Values[kvp.Key] = kvp.Value;
-        //            Console.WriteLine($"[Merged Q4 Value] Key: '{kvp.Key}', Value: {kvp.Value}");
-        //        }
-
-        //        Console.WriteLine($"[ProcessAllFinancialElementsAsync] Completed processing for CompanyID: {companyId}, Year: {year}");
-        //    }
         private static async Task ProcessAllFinancialElementsAsync(
         int companyId,
         int year,
@@ -940,9 +716,6 @@ WHERE CompanyID = @CompanyID";
             }
             return null;
         }
-
-
-
         public static void MergeEntries(this FinancialDataEntry existingEntry, FinancialDataEntry newEntry)
         {
             existingEntry.IsXbrlParsed = existingEntry.IsXbrlParsed || newEntry.IsXbrlParsed;
