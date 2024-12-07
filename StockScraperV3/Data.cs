@@ -388,7 +388,7 @@ WHERE CompanyID = @CompanyID";
             DateTime adjustedDate = new DateTime(fiscalYearEndDate.Year, nearestQuarterEndMonth, lastDay);
             return adjustedDate;
         }
-        private static string GetStatementType(string elementName)
+        public static string GetStatementType(string elementName)
         {
             if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
             {   // For HTML elements, extract the statement type
@@ -453,7 +453,7 @@ WHERE CompanyID = @CompanyID";
             }
         }
 
-        private static string AdjustElementNameForQuarter(string elementName, int quarter)
+        public static string AdjustElementNameForQuarter(string elementName, int quarter)
         {
             if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
             {               
@@ -838,82 +838,7 @@ WHERE CompanyID = @CompanyID
                 }
             }
         }
-        //public static async Task CalculateAndSaveQ4InDatabaseAsync(SqlConnection connection, SqlTransaction transaction, int companyId, DataNonStatic dataNonStatic)
-        //{
-        //    var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
-        //    if (companyData == null)
-        //    {
-        //        Console.WriteLine($"[ERROR] Failed to load CompanyData for CompanyID: {companyId}. Cannot calculate Q4.");
-        //        return;
-        //    }
-        //    DateTime? fiscalYearEndDate = companyData.GetMostRecentFiscalYearEndDate();
-        //    if (!fiscalYearEndDate.HasValue)
-        //    {
-        //        Console.WriteLine($"[ERROR] No fiscal year end date found for CompanyID: {companyId}. Cannot calculate Q4.");
-        //        return;
-        //    }
-        //    DateTime stopDate = new DateTime(2012, 1, 1);
-        //    DateTime currentFiscalYearEndDate = fiscalYearEndDate.Value;
-        //    int currentFiscalYear = CompanyFinancialData.GetFiscalYear(currentFiscalYearEndDate, 0, currentFiscalYearEndDate);
-        //    int maxIterations = 11;
-        //    int iteration = 0;
-        //    List<FinancialDataEntry> q4Entries = new List<FinancialDataEntry>();// Load all financial entries into memory
-        //    var financialEntries = companyData.FinancialEntries.Values.ToList();
-        //    while (currentFiscalYearEndDate >= stopDate && iteration < maxIterations)
-        //    {
-        //        (DateTime fiscalYearStartDate, DateTime fiscalYearEndDateActual) = Data.GetStandardPeriodDates(currentFiscalYear, 0, currentFiscalYearEndDate);
-        //        DateTime q3EndDate = GetQuarterEndDateFromEntries(financialEntries, companyId, currentFiscalYear, 3);
-        //        DateTime q4StartDate;
-        //        if (q3EndDate != DateTime.MinValue)
-        //        {
-        //            q4StartDate = q3EndDate.AddDays(1);
-        //        }
-        //        else
-        //        {
-        //            TimeSpan fiscalYearDuration = fiscalYearEndDateActual - fiscalYearStartDate;
-        //            int daysInFiscalYear = fiscalYearDuration.Days + 1;
-        //            int daysPerQuarter = daysInFiscalYear / 4;
-        //            q4StartDate = fiscalYearStartDate.AddDays(3 * daysPerQuarter);
-        //        }
-        //        DateTime q4EndDate = fiscalYearEndDateActual;
-        //        var q4Values = new Dictionary<string, object>();
-        //        var allElementNames = GetAllFinancialElementsFromEntries(financialEntries, currentFiscalYear);
-        //        await ProcessAllFinancialElementsAsync(companyId, currentFiscalYear, q4Values, allElementNames, financialEntries);
-        //        try
-        //        {
-        //            var q4Entry = new FinancialDataEntry
-        //            {
-        //                CompanyID = companyId,
-        //                StartDate = q4StartDate,
-        //                EndDate = q4EndDate,
-        //                Quarter = 4,
-        //                Year = currentFiscalYear,
-        //                IsHtmlParsed = true,
-        //                IsXbrlParsed = true,
-        //                FinancialValues = q4Values
-        //            };
-        //            q4Entries.Add(q4Entry);
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            Console.WriteLine($"[ERROR] Failed to prepare Q4 data for Fiscal Year {currentFiscalYear}: {ex.Message}");
-        //        }
-        //        currentFiscalYearEndDate = currentFiscalYearEndDate.AddYears(-1);
-        //        currentFiscalYear = CompanyFinancialData.GetFiscalYear(currentFiscalYearEndDate, 0, currentFiscalYearEndDate);
-        //        iteration++;
-        //    }
-        //    if (q4Entries.Count > 0)
-        //    {
-        //        try
-        //        {
-        //            await SaveCompleteEntryToDatabaseAsync(q4Entries, connection, transaction);
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            Console.WriteLine($"[ERROR] Failed to insert Q4 data: {ex.Message}");
-        //        }
-        //    }
-        //}
+        
         public static async Task CalculateAndSaveQ4InDatabaseAsync(SqlConnection connection, SqlTransaction transaction, int companyId, DataNonStatic dataNonStatic)
         {
             var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);

@@ -322,6 +322,133 @@ namespace StockScraperV3
             }
             return filings;
         }
+        //public static async Task RunScraperAsync()
+        //{
+        //    var nasdaq100Companies = await GetNasdaq100CompaniesFromDatabase();
+        //    var driverPool = new ChromeDriverPool(5); // Initialize pool with 5 drivers
+        //    var semaphore = new SemaphoreSlim(5); // Limit concurrency to match the driver pool size            
+        //    var dataNonStatic = new DataNonStatic(); // Initialize a shared DataNonStatic instance
+
+        //    foreach (var company in nasdaq100Companies)
+        //    {
+        //        var localCompany = company;
+        //        Console.WriteLine($"Starting processing for {localCompany.companyName} ({localCompany.symbol})");
+
+        //        // Fetch filings concurrently (10-K and 10-Q)
+        //        var filingTasks = new[]
+        //        {
+        //    StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-K"),
+        //    StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-Q")
+        //};
+        //        var filingsResults = await Task.WhenAll(filingTasks);
+        //        var filings = filingsResults
+        //            .SelectMany(f => f)
+        //            .DistinctBy(f => f.url)
+        //            .Select(f => (f.url, f.description))
+        //            .ToList();
+
+        //        if (!filings.Any())
+        //        {
+        //            Console.WriteLine($"No filings found for {localCompany.companyName} ({localCompany.symbol})");
+        //            continue;
+        //        }
+
+        //        var chromeDriverTasks = new List<Task>();
+        //        foreach (var filing in filings)
+        //        {
+        //            // Semaphore ensures only 5 tasks run concurrently
+        //            await semaphore.WaitAsync();
+        //            chromeDriverTasks.Add(Task.Run(async () =>
+        //            {
+        //                try
+        //                {
+        //                    await ProcessFilingAsync(filing, localCompany, driverPool, dataNonStatic);
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    Console.WriteLine($"[ERROR] Exception during filing processing for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
+        //                }
+        //                finally
+        //                {
+        //                    semaphore.Release(); // Release the semaphore after task completion
+        //                }
+        //            }));
+        //        }
+        //        await Task.WhenAll(chromeDriverTasks);
+
+        //        // Save completed initial entries (Q1, Q2, Q3, Annual Reports) to the database
+        //        // ... After processing ALL filings for a company:
+        //        var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(localCompany.companyId);
+        //        if (completedEntries.Any())
+        //        {
+        //            // Perform a single bulk save now that all regular entries are parsed
+        //            await dataNonStatic.SaveAllEntriesToDatabaseAsync(localCompany.companyId);
+        //        }
+        //        else
+        //        {
+        //            Console.WriteLine($"[INFO] No completed entries to save for {localCompany.companyName} ({localCompany.symbol}).");
+        //        }
+
+        //        // Now run Q4 calculations and save them at the end:
+        //        using (SqlConnection connection = new SqlConnection(connectionString))
+        //        {
+        //            await connection.OpenAsync();
+        //            using (SqlTransaction transaction = connection.BeginTransaction())
+        //            {
+        //                try
+        //                {
+        //                    // Q4 calculations and save all Q4 entries at once
+        //                    await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic);
+        //                    transaction.Commit();
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    Console.WriteLine($"[ERROR] Transaction failed for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
+        //                    try
+        //                    {
+        //                        transaction.Rollback();
+        //                        Console.WriteLine($"Transaction rolled back for {localCompany.companyName} ({localCompany.symbol}).");
+        //                    }
+        //                    catch (Exception rollbackEx)
+        //                    {
+        //                        Console.WriteLine($"[ERROR] Rollback failed for {localCompany.companyName} ({localCompany.symbol}): {rollbackEx.Message}");
+        //                    }
+        //                }
+        //            }
+        //        }
+
+
+        //        // Now calculate and save Q4 entries
+        //        using (SqlConnection connection = new SqlConnection(connectionString))
+        //        {
+        //            await connection.OpenAsync();
+        //            using (SqlTransaction transaction = connection.BeginTransaction())
+        //            {
+        //                try
+        //                {
+        //                    await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic);
+        //                    transaction.Commit();
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    Console.WriteLine($"[ERROR] Transaction failed for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
+        //                    try
+        //                    {
+        //                        transaction.Rollback();
+        //                        Console.WriteLine($"Transaction rolled back for {localCompany.companyName} ({localCompany.symbol}).");
+        //                    }
+        //                    catch (Exception rollbackEx)
+        //                    {
+        //                        Console.WriteLine($"[ERROR] Rollback failed for {localCompany.companyName} ({localCompany.symbol}): {rollbackEx.Message}");
+        //                    }
+        //                }
+        //            }
+        //        }
+        //        Console.WriteLine($"Finished processing for {localCompany.companyName} ({localCompany.symbol})");
+        //    }
+        //    driverPool.Dispose(); // Dispose of the driver pool after processing
+        //    semaphore.Dispose(); // Dispose of the semaphore
+        //}
         public static async Task RunScraperAsync()
         {
             var nasdaq100Companies = await GetNasdaq100CompaniesFromDatabase();
@@ -376,12 +503,99 @@ namespace StockScraperV3
                 }
                 await Task.WhenAll(chromeDriverTasks);
 
-                // Save completed initial entries (Q1, Q2, Q3, Annual Reports) to the database
-                // ... After processing ALL filings for a company:
-                var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(localCompany.companyId);
-                if (completedEntries.Any())
+                // **Step 1: Adjust Q2 and Q3 Cashflows from Cumulative to Actual Values**
+                Console.WriteLine($"[INFO] Adjusting Q2 and Q3 Cashflows for {localCompany.companyName} ({localCompany.symbol})");
+                var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(localCompany.companyId);
+                var currentFiscalYear = GetCurrentFiscalYear(companyData);
+                var entriesForYear = companyData.FinancialEntries.Values
+                    .Where(e => e.Year == currentFiscalYear)
+                    .ToList();
+
+                var Q1entry = entriesForYear.FirstOrDefault(e => e.Quarter == 1);
+                var Q2entry = entriesForYear.FirstOrDefault(e => e.Quarter == 2);
+                var Q3entry = entriesForYear.FirstOrDefault(e => e.Quarter == 3);
+
+                if (Q1entry != null && Q2entry != null && Q3entry != null)
                 {
-                    // Perform a single bulk save now that all regular entries are parsed
+                    // Gather all keys that appear in these quarters
+                    var allKeys = new HashSet<string>(
+                        Q1entry.FinancialValues.Keys
+                        .Concat(Q2entry.FinancialValues.Keys)
+                        .Concat(Q3entry.FinancialValues.Keys),
+                        StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var key in allKeys)
+                    {
+                        // We only adjust HTML-based Cashflow items
+                        if (key.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string statementType = Data.Data.GetStatementType(key).ToLowerInvariant();
+                            bool isCashFlow = statementType.Contains("cashflow");
+
+                            if (isCashFlow)
+                            {
+                                // Log the current key being processed
+                                Console.WriteLine($"[DEBUG] Processing key: {key}");
+
+                                // Extract the base element name by removing the quarter report part
+                                string baseKey = RemoveQuarterFromElementName(key);
+
+                                // Log the base key
+                                Console.WriteLine($"[DEBUG] Base key after removal: {baseKey}");
+
+                                // Construct correct quarter-specific keys
+                                string q1Key = AdjustElementNameForQuarter(baseKey, 1);
+                                string q2Key = AdjustElementNameForQuarter(baseKey, 2);
+                                string q3Key = AdjustElementNameForQuarter(baseKey, 3);
+
+                                // Log the constructed keys
+                                Console.WriteLine($"[DEBUG] Constructed Q1 Key: {q1Key}");
+                                Console.WriteLine($"[DEBUG] Constructed Q2 Key: {q2Key}");
+                                Console.WriteLine($"[DEBUG] Constructed Q3 Key: {q3Key}");
+
+                                // Extract numeric values using the updated ExtractNumericValue method
+                                decimal Q1_cum = ExtractNumericValue(Q1entry.FinancialValues.TryGetValue(q1Key, out var Q1_obj) ? Q1_obj : null, q1Key);
+                                decimal Q2_cum = ExtractNumericValue(Q2entry.FinancialValues.TryGetValue(q2Key, out var Q2_obj) ? Q2_obj : null, q2Key);
+                                decimal Q3_cum = ExtractNumericValue(Q3entry.FinancialValues.TryGetValue(q3Key, out var Q3_obj) ? Q3_obj : null, q3Key);
+
+                                // Log the extracted cumulative values
+                                Console.WriteLine($"[DEBUG] Extracted Q1_cum: {Q1_cum}, Q2_cum: {Q2_cum}, Q3_cum: {Q3_cum} for baseKey: {baseKey}");
+
+                                // Ensure Q2_cum and Q3_cum are valid
+                                if (Q2_cum == 0 || Q3_cum == 0)
+                                {
+                                    Console.WriteLine($"[WARNING] Invalid cumulative value for {baseKey}. Q2_cum: {Q2_cum}, Q3_cum: {Q3_cum}. Skipping adjustment.");
+                                    continue;
+                                }
+
+                                decimal Q2_actual = Q2_cum - Q1_cum;
+                                decimal Q3_actual = Q3_cum - Q2_cum;
+
+                                if (Q2_actual < 0 || Q3_actual < 0)
+                                {
+                                    Console.WriteLine($"[WARNING] Negative actual values for {baseKey}. Q2_actual: {Q2_actual}, Q3_actual: {Q3_actual}. Skipping.");
+                                    continue;
+                                }
+
+                                // Update the entries with actual values
+                                Q2entry.FinancialValues[q2Key] = Q2_actual;
+                                Q3entry.FinancialValues[q3Key] = Q3_actual;
+
+                                Console.WriteLine($"[Cashflow Adjustment] Key Base: {baseKey}, Q1: {Q1_cum}, Q2: {Q2_actual}, Q3: {Q3_actual}");
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"[WARNING] Missing Q1, Q2, or Q3 entries for {localCompany.companyName} ({localCompany.symbol}). Skipping cashflow adjustments.");
+                }
+
+                // **Step 2: Save Adjusted Entries to Database**
+                Console.WriteLine($"[INFO] Saving adjusted entries to database for {localCompany.companyName} ({localCompany.symbol})");
+                var adjustedEntries = companyData.GetCompletedEntries();
+                if (adjustedEntries.Any())
+                {
                     await dataNonStatic.SaveAllEntriesToDatabaseAsync(localCompany.companyId);
                 }
                 else
@@ -389,36 +603,8 @@ namespace StockScraperV3
                     Console.WriteLine($"[INFO] No completed entries to save for {localCompany.companyName} ({localCompany.symbol}).");
                 }
 
-                // Now run Q4 calculations and save them at the end:
-                using (SqlConnection connection = new SqlConnection(connectionString))
-                {
-                    await connection.OpenAsync();
-                    using (SqlTransaction transaction = connection.BeginTransaction())
-                    {
-                        try
-                        {
-                            // Q4 calculations and save all Q4 entries at once
-                            await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic);
-                            transaction.Commit();
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[ERROR] Transaction failed for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
-                            try
-                            {
-                                transaction.Rollback();
-                                Console.WriteLine($"Transaction rolled back for {localCompany.companyName} ({localCompany.symbol}).");
-                            }
-                            catch (Exception rollbackEx)
-                            {
-                                Console.WriteLine($"[ERROR] Rollback failed for {localCompany.companyName} ({localCompany.symbol}): {rollbackEx.Message}");
-                            }
-                        }
-                    }
-                }
-
-
-                // Now calculate and save Q4 entries
+                // **Step 3: Perform Q4 Calculations Once**
+                Console.WriteLine($"[INFO] Calculating and saving Q4 entries for {localCompany.companyName} ({localCompany.symbol})");
                 using (SqlConnection connection = new SqlConnection(connectionString))
                 {
                     await connection.OpenAsync();
@@ -431,7 +617,7 @@ namespace StockScraperV3
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[ERROR] Transaction failed for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
+                            Console.WriteLine($"[ERROR] Transaction failed while calculating/saving Q4 for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
                             try
                             {
                                 transaction.Rollback();
@@ -439,16 +625,99 @@ namespace StockScraperV3
                             }
                             catch (Exception rollbackEx)
                             {
-                                Console.WriteLine($"[ERROR] Rollback failed for {localCompany.companyName} ({localCompany.symbol}): {rollbackEx.Message}");
+                                Console.WriteLine($"[ERROR] Transaction rollback failed for {localCompany.companyName} ({localCompany.symbol}): {rollbackEx.Message}");
                             }
                         }
                     }
                 }
+
                 Console.WriteLine($"Finished processing for {localCompany.companyName} ({localCompany.symbol})");
             }
             driverPool.Dispose(); // Dispose of the driver pool after processing
             semaphore.Dispose(); // Dispose of the semaphore
         }
+
+        private static decimal ExtractNumericValue(object valueObj, string key)
+        {
+            if (valueObj == null)
+            {
+                Console.WriteLine($"[WARNING] Value object is null for key: {key}. Returning 0.");
+                return 0;
+            }
+
+            // Handle numeric types directly
+            switch (valueObj)
+            {
+                case decimal decimalVal:
+                    return decimalVal;
+                case double doubleVal:
+                    return (decimal)doubleVal;
+                case float floatVal:
+                    return (decimal)floatVal;
+                case int intVal:
+                    return intVal;
+                case long longVal:
+                    return longVal;
+                case string strVal:
+                    if (decimal.TryParse(strVal, out decimal result))
+                        return result;
+                    else
+                    {
+                        Console.WriteLine($"[WARNING] Failed to parse numeric value for key: {key}. ValueStr: '{strVal}'. Returning 0.");
+                        return 0;
+                    }
+                default:
+                    Console.WriteLine($"[WARNING] Unsupported type '{valueObj.GetType()}' for key: {key}. Returning 0.");
+                    return 0;
+            }
+        }
+
+        private static string AdjustElementNameForQuarter(string elementName, int quarter)
+        {
+            if (!elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
+                return elementName;
+
+            // This pattern matches 'HTML_' followed by 'Report' + 4-digit year + underscore
+            // We then re-insert Q{quarter} right after 'HTML_' and before 'Report'.
+            string pattern = @"^(HTML_)Report(\d{4}_)";
+            string replacement = $"$1Q{quarter}Report$2";  // Insert Q{quarter} after 'HTML_' and before 'ReportYYYY_'
+
+            // Perform the replacement
+            string newKey = Regex.Replace(elementName, pattern, replacement, RegexOptions.IgnoreCase);
+            return newKey;
+        }
+
+
+        // Helper function to remove only the quarter digit but keep `HTML_Q`:
+        private static string RemoveQuarterFromElementName(string elementName)
+        {
+            // Updated pattern to capture 'HTML_' followed by 'Q' and a digit, then 'ReportYYYY_'
+            string pattern = @"^(HTML_)Q\d(Report\d{4}_)";
+            string replacement = "$1$2"; // This removes the quarter digit but keeps 'HTML_ReportYYYY_'
+            return Regex.Replace(elementName, pattern, replacement, RegexOptions.IgnoreCase);
+        }
+
+
+
+
+
+        private static int GetCurrentFiscalYear(CompanyFinancialData companyData)
+        {
+            // Implement logic to determine current fiscal year if needed
+            // For now, just return the most recent fiscal year found in the entries
+            var years = companyData.FinancialEntries.Values.Select(e => e.Year).Distinct().ToList();
+            return years.Any() ? years.Max() : DateTime.Now.Year;
+        }
+
+
+        
+
+
+        /// <summary>
+        /// Helper method to determine the current fiscal year based on the most recent fiscal year end date.
+        /// </summary>
+        
+
         public static async Task<int> GetCompanyIdBySymbol(string companySymbol)
         {
             int companyId = 0;
