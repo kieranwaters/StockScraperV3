@@ -622,17 +622,20 @@ WHERE CompanyID = @CompanyID";
 
                 if (annualValue.HasValue)
                 {
-                    string statementType = GetStatementType(elementName);
-                    bool isBalanceSheet = statementType.Equals("balancesheets", StringComparison.OrdinalIgnoreCase);
-                    bool isCashFlow = statementType.Equals("cashflows", StringComparison.OrdinalIgnoreCase);
+                    string statementType = GetStatementType(elementName).ToLowerInvariant();
+                    bool isBalanceSheet = statementType.Contains("balancesheet"); // Adjusted to include 'balancesheet' as a substring
+                    bool isCashFlow = statementType.Contains("cashflow"); // Adjusted to include 'cashflow' as a substring
+
+                    // New condition: Check if the element name contains 'in shares' (case-insensitive)
+                    bool containsInShares = elementName.IndexOf("in shares", StringComparison.OrdinalIgnoreCase) >= 0;
 
                     decimal? q4Value = null;
 
-                    if (isBalanceSheet)
+                    if (isBalanceSheet || containsInShares)
                     {
-                        // For Balance Sheet items, Q4 = Annual value
+                        // For Balance Sheet items or elements containing 'in shares', Q4 = Annual value
                         q4Value = annualValue.Value;
-                        Console.WriteLine($"[Q4 Calculation] Balance Sheet - Q4 = Annual ({q4Value}) for '{baseAnnualName}'");
+                        Console.WriteLine($"[Q4 Calculation] {(isBalanceSheet ? "Balance Sheet" : "In Shares")} - Q4 = Annual ({q4Value}) for '{baseAnnualName}'");
                     }
                     else if (isCashFlow)
                     {
@@ -698,6 +701,7 @@ WHERE CompanyID = @CompanyID";
 
             Console.WriteLine($"[ProcessAllFinancialElementsAsync] Completed processing for CompanyID: {companyId}, Year: {year}");
         }
+
 
 
         private static decimal? GetFinancialValueFromEntries(Dictionary<int, FinancialDataEntry> entriesByQuarter, int quarter, string compositeBaseName)
