@@ -256,11 +256,11 @@ namespace StockScraperV3
             }
 
             // After all filings have been processed, retrieve completed entries
-            var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(companyId);
-            if (completedEntries.Count > 0)
-            {
-                await dataNonStatic.SaveEntriesToDatabaseAsync(companyId, completedEntries);
-            }
+            //var completedEntries = await dataNonStatic.GetCompletedEntriesAsync(companyId);
+            //if (completedEntries.Count > 0)
+            //{
+            //    await dataNonStatic.SaveEntriesToDatabaseAsync(companyId, completedEntries);
+            //}
 
 
             // **Removed Q4 calculation from here to prevent duplicate entries**
