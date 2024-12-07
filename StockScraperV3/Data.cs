@@ -621,13 +621,13 @@ WHERE CompanyID = @CompanyID";
                         q4Value = annualValue.Value;
                         
                     }
-                    else if (isCashFlow)
-                    {
-                        // For Cashflow items, Q4 = Annual value - Q3
-                        decimal q3Val = q3Value.GetValueOrDefault();
-                        q4Value = annualValue.Value - q3Val;
+                    //else if (isCashFlow)
+                    //{
+                    //    // For Cashflow items, Q4 = Annual value - Q3
+                    //    decimal q3Val = q3Value.GetValueOrDefault();
+                    //    q4Value = annualValue.Value - q3Val;
                         
-                    }
+                    //}
                     else
                     {
                         // For other statement types, default to Annual - (Q1 + Q2 + Q3)
