@@ -758,16 +758,6 @@ namespace StockScraperV3
             var years = companyData.FinancialEntries.Values.Select(e => e.Year).Distinct().ToList();
             return years.Any() ? years.Max() : DateTime.Now.Year;
         }
-
-
-        
-
-
-        /// <summary>
-        /// Helper method to determine the current fiscal year based on the most recent fiscal year end date.
-        /// </summary>
-        
-
         public static async Task<int> GetCompanyIdBySymbol(string companySymbol)
         {
             int companyId = 0;
