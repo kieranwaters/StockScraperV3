@@ -31,14 +31,36 @@ namespace HTML
             sanitizedElementLabel = sanitizedElementLabel.Replace(":", "");
             return $"HTML_Q{quarter}Report{year}_{sanitizedStatementType}_{sanitizedElementLabel}";
         }
+        //public static async Task InitializeDriverPool()
+        //{
+        //    for (int i = 0; i < 5; i++)
+        //    {
+        //        var driver = StartNewSession(); // Replace with your driver initialization logic
+        //        driverPool.Add(driver);
+        //    }
+        //}
         public static async Task InitializeDriverPool()
         {
+            var tasks = new List<Task<ChromeDriver>>();
+
             for (int i = 0; i < 5; i++)
             {
-                var driver = StartNewSession(); // Replace with your driver initialization logic
+                tasks.Add(StartNewSessionAsync());
+            }
+
+            var drivers = await Task.WhenAll(tasks);
+
+            foreach (var driver in drivers)
+            {
                 driverPool.Add(driver);
             }
         }
+
+        public static async Task<ChromeDriver> StartNewSessionAsync()
+        {
+            return await Task.Run(() => StartNewSession());
+        }
+
         public static ChromeDriver StartNewSession()
         {
             ChromeOptions options = new ChromeOptions();
@@ -295,10 +317,30 @@ namespace HTML
                                 continue;
                             }
                             string normalizedStatementType = NormalizeStatementName(statementName);
-                            string elementName = ConstructHtmlElementName(quarter, fiscalYear, normalizedStatementType, label); // Construct the element name  
-                            parsedData.FinancialValues[elementName] = value; // Add the element to the parsed data
-                            parsedData.FinancialValueTypes[elementName] = typeof(double);
-                            elements.Add(label); // Add the element label to the parsed elements list
+                            string elementName = ConstructHtmlElementName(quarter, fiscalYear, normalizedStatementType, label);
+
+                            // Check if we already have a value for this elementName
+                            if (parsedData.FinancialValues.TryGetValue(elementName, out object existingValue))
+                            {
+                                if (existingValue is double existingDouble)
+                                {
+                                    double currentDouble = value; // 'value' from your parsing code
+                                                                  // Keep only the larger value
+                                    if (currentDouble > existingDouble)
+                                    {
+                                        parsedData.FinancialValues[elementName] = currentDouble;
+                                        // FinancialValueTypes is likely set once, no need to reset it
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // If this is the first time we see this elementName, just set it
+                                parsedData.FinancialValues[elementName] = value;
+                                parsedData.FinancialValueTypes[elementName] = typeof(double);
+                                elements.Add(label);
+                            }
+
                         }
                     }
                     if (isAnnualReport)

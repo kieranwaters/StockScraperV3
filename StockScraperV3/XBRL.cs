@@ -1,23 +1,10 @@
 ﻿using Data;
 using System.Data.SqlClient;
-using DataElements;
 using HtmlAgilityPack;
-using System.Data.SqlClient;
-using System.Net.Http;
-using System.Threading.Tasks;
 using System.Xml.Linq;
-using Nasdaq100FinancialScraper;
 using System.Net;
-using Data;
 using System.Data;
-using System.Transactions;
 using static StockScraperV3.URL;
-using OfficeOpenXml.Packaging.Ionic.Zlib;
-using OpenQA.Selenium.BiDi.Modules.BrowsingContext;
-using static System.Runtime.InteropServices.JavaScript.JSType;
-using System.Diagnostics;
-using System.Net.NetworkInformation;
-using System;
 
 namespace XBRL
 {
@@ -25,12 +12,13 @@ namespace XBRL
     {
         private static readonly SemaphoreSlim requestSemaphore = new SemaphoreSlim(1, 1);
         public static async Task<(string? url, bool isIxbrl)> GetXbrlUrl(string filingUrl)
-        {    // Timeout for the HttpClient request
+        {
             int timeoutInSeconds = 15;
-            int maxRetries = 3;
-            int delayBetweenRetries = 1000;
+            int maxRetries = 1; // Increase number of retries
+            int delayBetweenRetries = 2000; // Start with a 2-second delay
             int attempt = 0;
-            await requestSemaphore.WaitAsync(); // Use semaphore to limit concurrent requests
+
+            await requestSemaphore.WaitAsync();
             try
             {
                 while (attempt < maxRetries)
@@ -40,9 +28,10 @@ namespace XBRL
                     {
                         using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutInSeconds)))
                         {
-                            string response = await HttpClientProvider.Client.GetStringAsync(filingUrl);
+                            string response = await HttpClientProvider.Client.GetStringAsync(filingUrl, cts.Token);
                             HtmlDocument doc = new HtmlDocument();
                             doc.LoadHtml(response);
+
                             var ixbrlNode = doc.DocumentNode.SelectSingleNode("//*[contains(text(), 'iXBRL')]");
                             bool isIxbrl = ixbrlNode != null;
                             if (isIxbrl)
@@ -53,6 +42,7 @@ namespace XBRL
                                     string xbrlUrl = $"https://www.sec.gov{xbrlNode.GetAttributeValue("href", string.Empty)}";
                                     return (xbrlUrl, true);
                                 }
+
                                 var txtNode = doc.DocumentNode.SelectSingleNode("//a[contains(@href, '.txt')]");
                                 if (txtNode != null)
                                 {
@@ -68,6 +58,7 @@ namespace XBRL
                                     string xbrlUrl = $"https://www.sec.gov{xbrlNode.GetAttributeValue("href", string.Empty)}";
                                     return (xbrlUrl, false);
                                 }
+
                                 var txtNode = doc.DocumentNode.SelectSingleNode("//a[contains(@href, '.txt')]");
                                 if (txtNode != null)
                                 {
@@ -81,6 +72,10 @@ namespace XBRL
                     {
                         Console.WriteLine($"[ERROR] Request timed out on attempt {attempt} for {filingUrl}. Retrying...");
                     }
+                    catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.ServiceUnavailable)
+                    {
+                        Console.WriteLine($"[ERROR] Received 503 Service Unavailable on attempt {attempt} for {filingUrl}. The SEC might be rate limiting us.");
+                    }
                     catch (HttpRequestException ex)
                     {
                         Console.WriteLine($"[ERROR] HTTP request failed on attempt {attempt}: {ex.Message}");
@@ -88,22 +83,27 @@ namespace XBRL
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[ERROR] Unexpected error on attempt {attempt}: {ex.Message}");
-                    }    // Wait before the next retry
+                    }
+
                     if (attempt < maxRetries)
                     {
-                        int randomizedDelay = delayBetweenRetries + new Random().Next(1000, 3000); // Adding a 1-3 seconds random delay
+                        // Increase delay and add randomness
+                        int randomizedDelay = delayBetweenRetries + new Random().Next(2000, 5000);
+                        Console.WriteLine($"[INFO] Waiting {randomizedDelay}ms before retrying (Attempt {attempt} of {maxRetries}).");
                         await Task.Delay(randomizedDelay);
                         delayBetweenRetries *= 2; // Exponential backoff
                     }
                 }
+
                 Console.WriteLine("[INFO] Failed to retrieve XBRL URL after maximum retry attempts.");
                 return (null, false);
             }
             finally
-            {     // Release the semaphore
+            {
                 requestSemaphore.Release();
             }
         }
+
         public static async Task<List<string>> ParseInlineXbrlContent(
     string xbrlContent,
     bool isAnnualReport,
