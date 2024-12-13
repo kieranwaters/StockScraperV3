@@ -75,9 +75,6 @@ namespace StockScraperV3
         private ChromeDriver StartNewSession()
         {
             ChromeOptions options = new ChromeOptions();
-            options.AddArgument("--disable-extensions"); // Disable extensions
-            options.AddArgument("--disable-plugins");
-
             options.AddArgument("--disable-gpu");            
             options.AddArgument("--window-size=1920x1080");
             options.AddArgument("--no-sandbox");

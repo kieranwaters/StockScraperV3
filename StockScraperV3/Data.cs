@@ -153,6 +153,22 @@ namespace Data
     {
         public ConcurrentDictionary<int, CompanyFinancialData> companyFinancialDataCache = new ConcurrentDictionary<int, CompanyFinancialData>();
         private const string connectionString = "Server=DESKTOP-SI08RN8\\SQLEXPRESS;Database=StockDataScraperDatabase;Integrated Security=True;";
+        public List<FinancialDataEntry> ExtractAllCompanyEntriesAndClear(int companyId)
+        {
+            if (!companyFinancialDataCache.TryGetValue(companyId, out var companyData))
+            {
+                return new List<FinancialDataEntry>();
+            }
+
+            // Extract all entries
+            var allEntries = companyData.FinancialEntries.Values.ToList();
+
+            // Clear them from the in-memory financial entries
+            companyData.FinancialEntries.Clear();
+
+            return allEntries;
+        }
+
         public async Task SaveAllEntriesToDatabaseAsync(int companyId)
         {
             var companyData = await GetOrLoadCompanyFinancialDataAsync(companyId);
@@ -817,81 +833,58 @@ WHERE CompanyID = @CompanyID
                     throw; // Re-throw to handle upstream
                 }
             }
-        }        
+        }
         public static async Task CalculateAndSaveQ4InDatabaseAsync(SqlConnection connection, SqlTransaction transaction, int companyId, DataNonStatic dataNonStatic)
         {
-            var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId);
-            if (companyData == null)
-            {
-                Console.WriteLine($"[ERROR] Failed to load CompanyData for CompanyID: {companyId}. Cannot calculate Q4.");
-                return;
-            }
-            DateTime? fiscalYearEndDate = companyData.GetMostRecentFiscalYearEndDate();
-            if (!fiscalYearEndDate.HasValue)
-            {
-                Console.WriteLine($"[ERROR] No fiscal year end date found for CompanyID: {companyId}. Cannot calculate Q4.");
-                return;
-            }
+            var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(companyId); if (companyData == null) { Console.WriteLine($"[ERROR] Failed to load CompanyData for CompanyID: {companyId}. Cannot calculate Q4."); return; }
+
+            DateTime? fiscalYearEndDate = companyData.GetMostRecentFiscalYearEndDate(); if (!fiscalYearEndDate.HasValue) { Console.WriteLine($"[ERROR] No fiscal year end date found for CompanyID: {companyId}. Cannot calculate Q4."); return; }
+
             DateTime stopDate = new DateTime(2012, 1, 1);
             DateTime currentFiscalYearEndDate = fiscalYearEndDate.Value;
             int currentFiscalYear = CompanyFinancialData.GetFiscalYear(currentFiscalYearEndDate, 0, currentFiscalYearEndDate);
-            int maxIterations = 11;
-            int iteration = 0;
+            int maxIterations = 11; int iteration = 0;
             List<FinancialDataEntry> q4Entries = new List<FinancialDataEntry>();
             var financialEntries = companyData.FinancialEntries.Values.ToList();
+
             while (currentFiscalYearEndDate >= stopDate && iteration < maxIterations)
             {
                 (DateTime fiscalYearStartDate, DateTime fiscalYearEndDateActual) = Data.GetStandardPeriodDates(currentFiscalYear, 0, currentFiscalYearEndDate);
                 DateTime q3EndDate = GetQuarterEndDateFromEntries(financialEntries, companyId, currentFiscalYear, 3);
-                DateTime q4StartDate;
-                if (q3EndDate != DateTime.MinValue)
-                {
-                    q4StartDate = q3EndDate.AddDays(1);
-                }
-                else
-                {
-                    TimeSpan fiscalYearDuration = fiscalYearEndDateActual - fiscalYearStartDate;
-                    int daysInFiscalYear = fiscalYearDuration.Days + 1;
-                    int daysPerQuarter = daysInFiscalYear / 4;
-                    q4StartDate = fiscalYearStartDate.AddDays(3 * daysPerQuarter);
-                }
+                DateTime q4StartDate; if (q3EndDate != DateTime.MinValue) { q4StartDate = q3EndDate.AddDays(1); } else { TimeSpan fiscalYearDuration = fiscalYearEndDateActual - fiscalYearStartDate; int daysInFiscalYear = fiscalYearDuration.Days + 1; int daysPerQuarter = daysInFiscalYear / 4; q4StartDate = fiscalYearStartDate.AddDays(3 * daysPerQuarter); }
                 DateTime q4EndDate = fiscalYearEndDateActual;
                 var q4Values = new Dictionary<string, object>();
-                var allElementNames = GetAllFinancialElementsFromEntries(financialEntries, currentFiscalYear);// Process Q4 and other values as before
+                var allElementNames = GetAllFinancialElementsFromEntries(financialEntries, currentFiscalYear);
                 await ProcessAllFinancialElementsAsync(companyId, currentFiscalYear, q4Values, allElementNames, financialEntries);
+
                 var entriesForYear = companyData.FinancialEntries.Values.Where(e => e.Year == currentFiscalYear).ToList();
                 var Q1entry = entriesForYear.FirstOrDefault(e => e.Quarter == 1);
                 var Q2entry = entriesForYear.FirstOrDefault(e => e.Quarter == 2);
                 var Q3entry = entriesForYear.FirstOrDefault(e => e.Quarter == 3);
                 var Q4entry = entriesForYear.FirstOrDefault(e => e.Quarter == 4);
+
                 if (Q1entry != null && Q2entry != null && Q3entry != null && Q4entry != null)
-                {// Gather all keys that appear in these quarters
-                    var allKeys = new HashSet<string>(
-                        Q1entry.FinancialValues.Keys
-                        .Concat(Q2entry.FinancialValues.Keys)
-                        .Concat(Q3entry.FinancialValues.Keys)
-                        .Concat(Q4entry.FinancialValues.Keys),
-                        StringComparer.OrdinalIgnoreCase);
+                {
+                    var allKeys = new HashSet<string>(Q1entry.FinancialValues.Keys.Concat(Q2entry.FinancialValues.Keys).Concat(Q3entry.FinancialValues.Keys).Concat(Q4entry.FinancialValues.Keys), StringComparer.OrdinalIgnoreCase);
                     foreach (var key in allKeys)
-                    {   // We only adjust HTML-based Cashflow items
+                    {
                         if (key.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
                         {
                             string statementType = GetStatementType(key).ToLowerInvariant();
                             bool isCashFlow = statementType.Contains("cashflow");
                             if (isCashFlow)
-                            {     // Retrieve original cumulative values
+                            {
                                 decimal Q1_cum = Q1entry.FinancialValues.TryGetValue(key, out var Q1_obj) && decimal.TryParse(Q1_obj?.ToString(), out decimal q1Val) ? q1Val : 0;
                                 decimal Q2_cum = Q2entry.FinancialValues.TryGetValue(key, out var Q2_obj) && decimal.TryParse(Q2_obj?.ToString(), out decimal q2Val) ? q2Val : 0;
                                 decimal Q3_cum = Q3entry.FinancialValues.TryGetValue(key, out var Q3_obj) && decimal.TryParse(Q3_obj?.ToString(), out decimal q3Val) ? q3Val : 0;
                                 decimal Q4_val = Q4entry.FinancialValues.TryGetValue(key, out var Q4_obj) && decimal.TryParse(Q4_obj?.ToString(), out decimal q4Val) ? q4Val : 0;
-                                decimal Q2_actual = Q2_cum - Q1_cum;
-                                decimal Q3_actual = Q3_cum - Q2_cum;
-                                Q2entry.FinancialValues[key] = Q2_actual;
-                                Q3entry.FinancialValues[key] = Q3_actual;
+                                decimal Q2_actual = Q2_cum - Q1_cum; decimal Q3_actual = Q3_cum - Q2_cum;
+                                Q2entry.FinancialValues[key] = Q2_actual; Q3entry.FinancialValues[key] = Q3_actual;
                             }
                         }
                     }
                 }
+
                 var q4Entry = new FinancialDataEntry
                 {
                     CompanyID = companyId,
@@ -903,23 +896,58 @@ WHERE CompanyID = @CompanyID
                     IsXbrlParsed = true,
                     FinancialValues = q4Values
                 };
-                q4Entries.Add(q4Entry);
+
+                // Only add the entry if EndDate is not later than the current date
+                if (q4Entry.EndDate <= DateTime.Now)
+                {
+                    // Check if we already have a Q4 entry for this company and currentFiscalYear
+                    var duplicates = q4Entries.Where(e => e.CompanyID == companyId && e.Quarter == 4 && e.Year == currentFiscalYear).ToList();
+                    if (duplicates.Count > 0)
+                    {
+                        // There is at least one duplicate
+                        // If the year == 0, keep the one closest to q4EndDate
+                        if (currentFiscalYear == 0)
+                        {
+                            duplicates.Add(q4Entry);
+                            // Determine which entry is closest to q4EndDate
+                            FinancialDataEntry closestEntry = duplicates.OrderBy(d => Math.Abs((d.EndDate - q4EndDate).TotalDays)).First();
+                            // Remove all duplicates
+                            q4Entries.RemoveAll(d => d.CompanyID == companyId && d.Year == 0 && d.Quarter == 4);
+                            // Add only the closest one
+                            q4Entries.Add(closestEntry);
+                        }
+                        else
+                        {
+                            // For years != 0, previous logic: remove the existing and add the new one
+                            var duplicateIndex = q4Entries.FindIndex(e => e.CompanyID == companyId && e.Year == currentFiscalYear && e.Quarter == 4);
+                            if (duplicateIndex >= 0)
+                            {
+                                q4Entries.RemoveAt(duplicateIndex);
+                            }
+                            q4Entries.Add(q4Entry);
+                        }
+                    }
+                    else
+                    {
+                        q4Entries.Add(q4Entry);
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"[INFO] Skipping Q4 entry with EndDate {q4Entry.EndDate} as it is later than the current date.");
+                }
+
                 currentFiscalYearEndDate = currentFiscalYearEndDate.AddYears(-1);
                 currentFiscalYear = CompanyFinancialData.GetFiscalYear(currentFiscalYearEndDate, 0, currentFiscalYearEndDate);
                 iteration++;
             }
+
             if (q4Entries.Count > 0)
             {
-                try
-                {
-                    await SaveCompleteEntryToDatabaseAsync(q4Entries, connection, transaction);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[ERROR] Failed to insert Q4 data: {ex.Message}");
-                }
+                try { await SaveCompleteEntryToDatabaseAsync(q4Entries, connection, transaction); } catch (Exception ex) { Console.WriteLine($"[ERROR] Failed to insert Q4 data: {ex.Message}"); }
             }
         }
+
         private static DateTime GetQuarterEndDateFromEntries(List<FinancialDataEntry> financialEntries, int companyId, int year, int quarter)
         {
             var entry = financialEntries.FirstOrDefault(e =>

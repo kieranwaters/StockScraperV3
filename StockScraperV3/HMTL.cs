@@ -348,7 +348,10 @@ namespace HTML
                         parsedData.Quarter = 0;
                         parsedData.Year = fiscalYear; // Set Year to the year of EndDate
                     }
-                    await dataNonStatic.AddParsedDataAsync(companyId, parsedData);
+                    if (parsedData.Quarter != 4)
+                    {
+                        await dataNonStatic.AddParsedDataAsync(companyId, parsedData);
+                    }
                 }
             }
             catch (Exception ex)
