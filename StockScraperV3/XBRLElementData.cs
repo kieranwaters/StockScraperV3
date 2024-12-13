@@ -12,7 +12,7 @@ namespace StockScraperV3
     public class XBRLElementData
     {
         private readonly string _connectionString;
-
+        //
         public XBRLElementData(string connectionString)
         {
             _connectionString = connectionString;
