@@ -461,27 +461,559 @@ namespace StockScraperV3
                 throw; // Re-throw the exception to allow higher-level handling if necessary
             }
         }
+        //public static async Task RunScraperAsync()
+        //{
+        //    var nasdaq100Companies = await GetNasdaq100CompaniesFromDatabase();
+        //    var driverPool = new ChromeDriverPool(5); // Initialize pool with 5 drivers
+        //    var semaphore = new SemaphoreSlim(5); // Limit concurrency to match the driver pool size            
+        //    var dataNonStatic = new DataNonStatic(); // Initialize a shared DataNonStatic instance
+        //    foreach (var company in nasdaq100Companies)
+        //    {
+        //        var localCompany = company;
+        //        Console.WriteLine($"Starting processing for {localCompany.companyName} ({localCompany.symbol})");
+        //        var filingTasks = new[]// Fetch filings concurrently (10-K and 10-Q)
+        //        {
+        //    StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-K"),
+        //    StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-Q")
+        //};
+        //        var filingsResults = await Task.WhenAll(filingTasks);
+        //        var filings = filingsResults
+        //            .SelectMany(f => f)
+        //            .DistinctBy(f => f.url)
+        //            .Select(f => (f.url, f.description))
+        //            .ToList();
+        //        if (!filings.Any())
+        //        {
+        //            Console.WriteLine($"No filings found for {localCompany.companyName} ({localCompany.symbol})");
+        //            continue;
+        //        }
+        //        var chromeDriverTasks = new List<Task>();
+        //        foreach (var filing in filings)
+        //        { // Semaphore ensures only 5 tasks run concurrently
+        //            await semaphore.WaitAsync();
+        //            chromeDriverTasks.Add(Task.Run(async () =>
+        //            {
+        //                ChromeDriver driver = null;
+        //                try
+        //                {
+        //                    driver = await driverPool.GetDriverAsync();
+        //                    await ProcessFilingAsync(filing, localCompany, driver, dataNonStatic);
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    Console.WriteLine($"[ERROR] Exception during filing processing for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
+        //                }
+        //                finally
+        //                {
+        //                    if (driver != null)
+        //                    {
+        //                        driverPool.ReturnDriver(driver);
+        //                    }
+        //                    semaphore.Release(); // Release the semaphore after task completion
+        //                }
+        //            }));
+        //        }
+        //        await Task.WhenAll(chromeDriverTasks);    // **Step 1: Adjust Q2 and Q3 Cashflows from Cumulative to Actual Values**
+        //        var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(localCompany.companyId);
+        //        var currentFiscalYear = GetCurrentFiscalYear(companyData);
+        //        var entriesForYear = companyData.FinancialEntries.Values
+        //            .Where(e => e.Year == currentFiscalYear)
+        //            .ToList();
+        //        var Q1entry = entriesForYear.FirstOrDefault(e => e.Quarter == 1);
+        //        var Q2entry = entriesForYear.FirstOrDefault(e => e.Quarter == 2);
+        //        var Q3entry = entriesForYear.FirstOrDefault(e => e.Quarter == 3);
+        //        if (Q1entry != null && Q2entry != null && Q3entry != null)
+        //        {// Gather all keys that appear in these quarters
+        //            var allKeys = new HashSet<string>(
+        //                Q1entry.FinancialValues.Keys
+        //                .Concat(Q2entry.FinancialValues.Keys)
+        //                .Concat(Q3entry.FinancialValues.Keys),
+        //                StringComparer.OrdinalIgnoreCase);
+        //            foreach (var key in allKeys)
+        //            {    // We only adjust HTML-based Cashflow items
+        //                if (key.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
+        //                {
+        //                    string statementType = Data.Data.GetStatementType(key).ToLowerInvariant();
+        //                    bool isCashFlow = statementType.Contains("cashflow");
+        //                    if (isCashFlow)
+        //                    {    // Extract the base element name by removing the quarter report part
+        //                        string baseKey = RemoveQuarterFromElementName(key);
+        //                        string q1Key = AdjustElementNameForQuarter(baseKey, 1);// Construct correct quarter-specific keys
+        //                        string q2Key = AdjustElementNameForQuarter(baseKey, 2);
+        //                        string q3Key = AdjustElementNameForQuarter(baseKey, 3);
+        //                        // Extract numeric values using the updated ExtractNumericValue method
+        //                        decimal Q1_cum = ExtractNumericValue(Q1entry.FinancialValues.TryGetValue(q1Key, out var Q1_obj) ? Q1_obj : null, q1Key);
+        //                        decimal Q2_cum = ExtractNumericValue(Q2entry.FinancialValues.TryGetValue(q2Key, out var Q2_obj) ? Q2_obj : null, q2Key);
+        //                        decimal Q3_cum = ExtractNumericValue(Q3entry.FinancialValues.TryGetValue(q3Key, out var Q3_obj) ? Q3_obj : null, q3Key);
+        //                        if (Q2_cum == 0 || Q3_cum == 0)// Ensure Q2_cum and Q3_cum are valid
+        //                        {
+        //                            Console.WriteLine($"[WARNING] Invalid cumulative value for {baseKey}. Q2_cum: {Q2_cum}, Q3_cum: {Q3_cum}. Skipping adjustment.");
+        //                            continue;
+        //                        }
+        //                        decimal Q2_actual = Q2_cum - Q1_cum;
+        //                        decimal Q3_actual = Q3_cum - Q2_cum;
+        //                        if (Q2_actual < 0 || Q3_actual < 0)
+        //                        {
+        //                            Console.WriteLine($"[WARNING] Negative actual values for {baseKey}. Q2_actual: {Q2_actual}, Q3_actual: {Q3_actual}. Skipping.");
+        //                            continue;
+        //                        }     // Update the entries with actual values
+        //                        Q2entry.FinancialValues[q2Key] = Q2_actual;
+        //                        Q3entry.FinancialValues[q3Key] = Q3_actual;
+        //                    }
+        //                }
+        //            }
+        //        }
+        //        var adjustedEntries = companyData.GetCompletedEntries();
+        //        if (adjustedEntries.Any())
+        //        {
+        //            await dataNonStatic.SaveAllEntriesToDatabaseAsync(localCompany.companyId);
+        //        }
+        //        else
+        //        {
+        //            Console.WriteLine($"[INFO] No completed entries to save for {localCompany.companyName} ({localCompany.symbol}).");
+        //        }
+        //        using (SqlConnection connection = new SqlConnection(connectionString))
+        //        {
+        //            await connection.OpenAsync();
+        //            using (SqlTransaction transaction = connection.BeginTransaction())
+        //            {
+        //                try
+        //                {
+        //                    await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic);
+        //                    transaction.Commit();
+        //                }
+        //                catch (Exception ex)
+        //                {
+        //                    Console.WriteLine($"[ERROR] Transaction failed while calculating/saving Q4 for {localCompany.companyName} ({localCompany.symbol}): {ex.Message}");
+        //                    try
+        //                    {
+        //                        transaction.Rollback();
+        //                        Console.WriteLine($"Transaction rolled back for {localCompany.companyName} ({localCompany.symbol}).");
+        //                    }
+        //                    catch (Exception rollbackEx)
+        //                    {
+        //                        Console.WriteLine($"[ERROR] Transaction rollback failed for {localCompany.companyName} ({localCompany.symbol}): {rollbackEx.Message}");
+        //                    }
+        //                }
+        //            }
+        //        }
+        //        Console.WriteLine($"Finished processing for {localCompany.companyName} ({localCompany.symbol})");
+        //    }
+        //    driverPool.Dispose(); // Dispose of the driver pool after processing
+        //    semaphore.Dispose(); // Dispose of the semaphore
+        //}
+        //public static async Task ContinueScrapingUnscrapedCompaniesAsync()
+        //{
+        //    try
+        //    {      // 1. Retrieve unscraped companies from the database
+        //        var unscrapedCompanies = await GetCompaniesWithHigherCompanyIDAsync();
+        //        Console.WriteLine($"[INFO] Retrieved {unscrapedCompanies.Count} unscraped companies.");
+
+        //        if (!unscrapedCompanies.Any())
+        //        {
+        //            Console.WriteLine("[INFO] No unscraped companies found.");
+        //            return;
+        //        }
+
+        //        // 2. Initialize ChromeDriverPool and concurrency control
+        //        using (var driverPool = new ChromeDriverPool(10))
+        //        {
+        //            var semaphore = new SemaphoreSlim(5, 5);
+        //            var dataNonStatic = new DataNonStatic(); // Shared instance for financial data processing
+
+        //            foreach (var company in unscrapedCompanies)
+        //            {
+        //                Console.WriteLine($"[INFO] Processing company: {company.companyName} ({company.symbol})");
+
+        //                // 3. Fetch filings for the current unscraped company (10-K and 10-Q), similar to RunScraperAsync
+        //                var filingTasks = new[]
+        //                {
+        //            GetFilingUrlsForLast10Years(company.cik.ToString(), "10-K"),
+        //            GetFilingUrlsForLast10Years(company.cik.ToString(), "10-Q")
+        //        };
+
+        //                var filingsResults = await Task.WhenAll(filingTasks);
+        //                var filings = filingsResults
+        //                    .SelectMany(f => f)
+        //                    .DistinctBy(f => f.url)
+        //                    .Select(f => (f.url, f.description))
+        //                    .ToList();
+
+        //                if (!filings.Any())
+        //                {
+        //                    Console.WriteLine($"[INFO] No filings found for {company.companyName} ({company.symbol}).");
+        //                    continue; // Move on to the next unscraped company
+        //                }
+
+        //                Console.WriteLine($"[INFO] Found {filings.Count} filings for {company.companyName} ({company.symbol}).");
+
+        //                // 4. Process each filing in parallel using up to 5 ChromeDrivers, just like in RunScraperAsync
+        //                var filingProcessingTasks = new List<Task>();
+        //                foreach (var filing in filings)
+        //                {
+        //                    await semaphore.WaitAsync();
+        //                    var task = Task.Run(async () =>
+        //                    {
+        //                        ChromeDriver driver = null;
+        //                        try
+        //                        {
+        //                            driver = await driverPool.GetDriverAsync();
+        //                            await ProcessFilingAsync(filing, company, driver, dataNonStatic);
+        //                        }
+        //                        catch (Exception ex)
+        //                        {
+        //                            Console.WriteLine($"[ERROR] Exception processing filing {filing.description} for {company.companyName}: {ex.Message}");
+        //                        }
+        //                        finally
+        //                        {
+        //                            if (driver != null)
+        //                            {
+        //                                driverPool.ReturnDriver(driver);
+        //                            }
+        //                            semaphore.Release();
+        //                        }
+        //                    });
+
+        //                    filingProcessingTasks.Add(task);
+        //                }
+
+        //                // Wait for all filings to be processed for this company
+        //                await Task.WhenAll(filingProcessingTasks);
+
+        //                // 5. Post-Processing Steps (Similar to RunScraperAsync):
+        //                // After processing all filings, adjust Q2 and Q3 cashflows, save entries, and perform Q4 calculations
+
+        //                var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(company.companyId);
+        //                var currentFiscalYear = GetCurrentFiscalYear(companyData);
+        //                var entriesForYear = companyData.FinancialEntries.Values
+        //                    .Where(e => e.Year == currentFiscalYear)
+        //                    .ToList();
+
+        //                var Q1entry = entriesForYear.FirstOrDefault(e => e.Quarter == 1);
+        //                var Q2entry = entriesForYear.FirstOrDefault(e => e.Quarter == 2);
+        //                var Q3entry = entriesForYear.FirstOrDefault(e => e.Quarter == 3);
+
+        //                if (Q1entry != null && Q2entry != null && Q3entry != null)
+        //                {
+        //                    // Gather all keys from these quarters
+        //                    var allKeys = new HashSet<string>(
+        //                        Q1entry.FinancialValues.Keys
+        //                        .Concat(Q2entry.FinancialValues.Keys)
+        //                        .Concat(Q3entry.FinancialValues.Keys),
+        //                        StringComparer.OrdinalIgnoreCase);
+
+        //                    foreach (var key in allKeys)
+        //                    {
+        //                        // We only adjust HTML-based Cashflow items
+        //                        if (key.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
+        //                        {
+        //                            string statementType = Data.Data.GetStatementType(key).ToLowerInvariant();
+        //                            bool isCashFlow = statementType.Contains("cashflow");
+        //                            if (isCashFlow)
+        //                            {
+        //                                string baseKey = RemoveQuarterFromElementName(key);
+
+        //                                string q1Key = AdjustElementNameForQuarter(baseKey, 1);
+        //                                string q2Key = AdjustElementNameForQuarter(baseKey, 2);
+        //                                string q3Key = AdjustElementNameForQuarter(baseKey, 3);
+
+        //                                decimal Q1_cum = ExtractNumericValue(Q1entry.FinancialValues.TryGetValue(q1Key, out var Q1_obj) ? Q1_obj : null, q1Key);
+        //                                decimal Q2_cum = ExtractNumericValue(Q2entry.FinancialValues.TryGetValue(q2Key, out var Q2_obj) ? Q2_obj : null, q2Key);
+        //                                decimal Q3_cum = ExtractNumericValue(Q3entry.FinancialValues.TryGetValue(q3Key, out var Q3_obj) ? Q3_obj : null, q3Key);
+
+        //                                if (Q2_cum == 0 || Q3_cum == 0)
+        //                                {
+        //                                    Console.WriteLine($"[WARNING] Invalid cumulative value for {baseKey}. Q2_cum: {Q2_cum}, Q3_cum: {Q3_cum}. Skipping adjustment.");
+        //                                    continue;
+        //                                }
+
+        //                                decimal Q2_actual = Q2_cum - Q1_cum;
+        //                                decimal Q3_actual = Q3_cum - Q2_cum;
+
+        //                                if (Q2_actual < 0 || Q3_actual < 0)
+        //                                {
+        //                                    Console.WriteLine($"[WARNING] Negative actual values for {baseKey}. Q2_actual: {Q2_actual}, Q3_actual: {Q3_actual}. Skipping.");
+        //                                    continue;
+        //                                }
+
+        //                                // Update entries with actual values
+        //                                Q2entry.FinancialValues[q2Key] = Q2_actual;
+        //                                Q3entry.FinancialValues[q3Key] = Q3_actual;
+        //                            }
+        //                        }
+        //                    }
+        //                }
+        //                else
+        //                {
+        //                    Console.WriteLine($"[WARNING] Missing Q1, Q2, or Q3 entries for {company.companyName} ({company.symbol}). Skipping cashflow adjustments.");
+        //                }
+
+        //                var adjustedEntries = companyData.GetCompletedEntries();
+        //                if (adjustedEntries.Any())
+        //                {
+        //                    await dataNonStatic.SaveAllEntriesToDatabaseAsync(company.companyId);
+        //                }
+        //                else
+        //                {
+        //                    Console.WriteLine($"[INFO] No completed entries to save for {company.companyName} ({company.symbol}).");
+        //                }
+
+        //                // Perform Q4 Calculations
+        //                using (SqlConnection connection = new SqlConnection(connectionString))
+        //                {
+        //                    await connection.OpenAsync();
+        //                    using (SqlTransaction transaction = connection.BeginTransaction())
+        //                    {
+        //                        try
+        //                        {
+        //                            await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, company.companyId, dataNonStatic);
+        //                            transaction.Commit();
+        //                        }
+        //                        catch (Exception ex)
+        //                        {
+        //                            Console.WriteLine($"[ERROR] Transaction failed while calculating/saving Q4 for {company.companyName} ({company.symbol}): {ex.Message}");
+        //                            try
+        //                            {
+        //                                transaction.Rollback();
+        //                                Console.WriteLine($"Transaction rolled back for {company.companyName} ({company.symbol}).");
+        //                            }
+        //                            catch (Exception rollbackEx)
+        //                            {
+        //                                Console.WriteLine($"[ERROR] Transaction rollback failed for {company.companyName} ({company.symbol}): {rollbackEx.Message}");
+        //                            }
+        //                        }
+        //                    }
+        //                }
+
+        //                Console.WriteLine($"Finished processing for {company.companyName} ({company.symbol})");
+        //            }
+
+        //            semaphore.Dispose();
+        //        }
+
+        //        Console.WriteLine("[INFO] RunScraperForUnscrapedCompaniesAsync completed successfully.");
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        Console.WriteLine($"[ERROR] Exception in RunScraperForUnscrapedCompaniesAsync: {ex.Message}");
+        //    }
+        //}
+        //public static async Task RunScraperForUnscrapedCompaniesAsync()
+        //{
+        //    try
+        //    {
+        //        Console.WriteLine("[INFO] Starting RunScraperForUnscrapedCompaniesAsync.");
+
+        //        // 1. Retrieve unscraped companies from the database
+        //        var unscrapedCompanies = await GetUnscrapedCompaniesFromDatabase();
+        //        Console.WriteLine($"[INFO] Retrieved {unscrapedCompanies.Count} unscraped companies.");
+
+        //        if (!unscrapedCompanies.Any())
+        //        {
+        //            Console.WriteLine("[INFO] No unscraped companies found.");
+        //            return;
+        //        }
+
+        //        // 2. Initialize ChromeDriverPool and concurrency control
+        //        using (var driverPool = new ChromeDriverPool(5))
+        //        {
+        //            var semaphore = new SemaphoreSlim(5, 5);
+        //            var dataNonStatic = new DataNonStatic(); // Shared instance for financial data processing
+
+        //            foreach (var company in unscrapedCompanies)
+        //            {
+        //                Console.WriteLine($"[INFO] Processing company: {company.companyName} ({company.symbol})");
+
+        //                // 3. Fetch filings for the current unscraped company (10-K and 10-Q), similar to RunScraperAsync
+        //                var filingTasks = new[]
+        //                {
+        //            GetFilingUrlsForLast10Years(company.cik.ToString(), "10-K"),
+        //            GetFilingUrlsForLast10Years(company.cik.ToString(), "10-Q")
+        //        };
+
+        //                var filingsResults = await Task.WhenAll(filingTasks);
+        //                var filings = filingsResults
+        //                    .SelectMany(f => f)
+        //                    .DistinctBy(f => f.url)
+        //                    .Select(f => (f.url, f.description))
+        //                    .ToList();
+
+        //                if (!filings.Any())
+        //                {
+        //                    Console.WriteLine($"[INFO] No filings found for {company.companyName} ({company.symbol}).");
+        //                    continue; // Move on to the next unscraped company
+        //                }
+
+        //                Console.WriteLine($"[INFO] Found {filings.Count} filings for {company.companyName} ({company.symbol}).");
+
+        //                // 4. Process each filing in parallel using up to 5 ChromeDrivers, just like in RunScraperAsync
+        //                var filingProcessingTasks = new List<Task>();
+        //                foreach (var filing in filings)
+        //                {
+        //                    await semaphore.WaitAsync();
+        //                    var task = Task.Run(async () =>
+        //                    {
+        //                        ChromeDriver driver = null;
+        //                        try
+        //                        {
+        //                            driver = await driverPool.GetDriverAsync();
+        //                            await ProcessFilingAsync(filing, company, driver, dataNonStatic);
+        //                        }
+        //                        catch (Exception ex)
+        //                        {
+        //                            Console.WriteLine($"[ERROR] Exception processing filing {filing.description} for {company.companyName}: {ex.Message}");
+        //                        }
+        //                        finally
+        //                        {
+        //                            if (driver != null)
+        //                            {
+        //                                driverPool.ReturnDriver(driver);
+        //                            }
+        //                            semaphore.Release();
+        //                        }
+        //                    });
+
+        //                    filingProcessingTasks.Add(task);
+        //                }
+
+        //                // Wait for all filings to be processed for this company
+        //                await Task.WhenAll(filingProcessingTasks);
+
+        //                // 5. Post-Processing Steps (Similar to RunScraperAsync):
+        //                // After processing all filings, adjust Q2 and Q3 cashflows, save entries, and perform Q4 calculations
+
+        //                var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(company.companyId);
+        //                var currentFiscalYear = GetCurrentFiscalYear(companyData);
+        //                var entriesForYear = companyData.FinancialEntries.Values
+        //                    .Where(e => e.Year == currentFiscalYear)
+        //                    .ToList();
+
+        //                var Q1entry = entriesForYear.FirstOrDefault(e => e.Quarter == 1);
+        //                var Q2entry = entriesForYear.FirstOrDefault(e => e.Quarter == 2);
+        //                var Q3entry = entriesForYear.FirstOrDefault(e => e.Quarter == 3);
+
+        //                if (Q1entry != null && Q2entry != null && Q3entry != null)
+        //                {
+        //                    // Gather all keys from these quarters
+        //                    var allKeys = new HashSet<string>(
+        //                        Q1entry.FinancialValues.Keys
+        //                        .Concat(Q2entry.FinancialValues.Keys)
+        //                        .Concat(Q3entry.FinancialValues.Keys),
+        //                        StringComparer.OrdinalIgnoreCase);
+
+        //                    foreach (var key in allKeys)
+        //                    {
+        //                        // We only adjust HTML-based Cashflow items
+        //                        if (key.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
+        //                        {
+        //                            string statementType = Data.Data.GetStatementType(key).ToLowerInvariant();
+        //                            bool isCashFlow = statementType.Contains("cashflow");
+        //                            if (isCashFlow)
+        //                            {
+        //                                string baseKey = RemoveQuarterFromElementName(key);
+
+        //                                string q1Key = AdjustElementNameForQuarter(baseKey, 1);
+        //                                string q2Key = AdjustElementNameForQuarter(baseKey, 2);
+        //                                string q3Key = AdjustElementNameForQuarter(baseKey, 3);
+
+        //                                decimal Q1_cum = ExtractNumericValue(Q1entry.FinancialValues.TryGetValue(q1Key, out var Q1_obj) ? Q1_obj : null, q1Key);
+        //                                decimal Q2_cum = ExtractNumericValue(Q2entry.FinancialValues.TryGetValue(q2Key, out var Q2_obj) ? Q2_obj : null, q2Key);
+        //                                decimal Q3_cum = ExtractNumericValue(Q3entry.FinancialValues.TryGetValue(q3Key, out var Q3_obj) ? Q3_obj : null, q3Key);
+
+        //                                if (Q2_cum == 0 || Q3_cum == 0)
+        //                                {
+        //                                    Console.WriteLine($"[WARNING] Invalid cumulative value for {baseKey}. Q2_cum: {Q2_cum}, Q3_cum: {Q3_cum}. Skipping adjustment.");
+        //                                    continue;
+        //                                }
+
+        //                                decimal Q2_actual = Q2_cum - Q1_cum;
+        //                                decimal Q3_actual = Q3_cum - Q2_cum;
+
+        //                                if (Q2_actual < 0 || Q3_actual < 0)
+        //                                {
+        //                                    Console.WriteLine($"[WARNING] Negative actual values for {baseKey}. Q2_actual: {Q2_actual}, Q3_actual: {Q3_actual}. Skipping.");
+        //                                    continue;
+        //                                }
+
+        //                                // Update entries with actual values
+        //                                Q2entry.FinancialValues[q2Key] = Q2_actual;
+        //                                Q3entry.FinancialValues[q3Key] = Q3_actual;
+        //                            }
+        //                        }
+        //                    }
+        //                }
+        //                else
+        //                {
+        //                    Console.WriteLine($"[WARNING] Missing Q1, Q2, or Q3 entries for {company.companyName} ({company.symbol}). Skipping cashflow adjustments.");
+        //                }
+
+        //                var adjustedEntries = companyData.GetCompletedEntries();
+        //                if (adjustedEntries.Any())
+        //                {
+        //                    await dataNonStatic.SaveAllEntriesToDatabaseAsync(company.companyId);
+        //                }
+        //                else
+        //                {
+        //                    Console.WriteLine($"[INFO] No completed entries to save for {company.companyName} ({company.symbol}).");
+        //                }
+
+        //                // Perform Q4 Calculations
+        //                using (SqlConnection connection = new SqlConnection(connectionString))
+        //                {
+        //                    await connection.OpenAsync();
+        //                    using (SqlTransaction transaction = connection.BeginTransaction())
+        //                    {
+        //                        try
+        //                        {
+        //                            await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, company.companyId, dataNonStatic);
+        //                            transaction.Commit();
+        //                        }
+        //                        catch (Exception ex)
+        //                        {
+        //                            Console.WriteLine($"[ERROR] Transaction failed while calculating/saving Q4 for {company.companyName} ({company.symbol}): {ex.Message}");
+        //                            try
+        //                            {
+        //                                transaction.Rollback();
+        //                                Console.WriteLine($"Transaction rolled back for {company.companyName} ({company.symbol}).");
+        //                            }
+        //                            catch (Exception rollbackEx)
+        //                            {
+        //                                Console.WriteLine($"[ERROR] Transaction rollback failed for {company.companyName} ({company.symbol}): {rollbackEx.Message}");
+        //                            }
+        //                        }
+        //                    }
+        //                }
+
+        //                Console.WriteLine($"Finished processing for {company.companyName} ({company.symbol})");
+        //            }
+
+        //            semaphore.Dispose();
+        //        }
+
+        //        Console.WriteLine("[INFO] RunScraperForUnscrapedCompaniesAsync completed successfully.");
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        Console.WriteLine($"[ERROR] Exception in RunScraperForUnscrapedCompaniesAsync: {ex.Message}");
+        //    }
+        //}
         public static async Task RunScraperAsync()
         {
-            var nasdaq100Companies = await GetNasdaq100CompaniesFromDatabase();
-            var driverPool = new ChromeDriverPool(5); // Initialize pool with 5 drivers
-            var semaphore = new SemaphoreSlim(5); // Limit concurrency to match the driver pool size            
-            var dataNonStatic = new DataNonStatic(); // Initialize a shared DataNonStatic instance
+            var nasdaq100Companies = await GetNasdaq100CompaniesFromDatabase(); //Get Nasdaq100 companies from DB
+            var driverPool = new ChromeDriverPool(10); //Initialize pool with 5 drivers
+            var semaphore = new SemaphoreSlim(5); //Limit concurrency to match the driver pool size
+            var dataNonStatic = new DataNonStatic(); //Initialize a shared DataNonStatic instance
             foreach (var company in nasdaq100Companies)
             {
-                var localCompany = company;
+                var localCompany = company; //Local reference for company
                 Console.WriteLine($"Starting processing for {localCompany.companyName} ({localCompany.symbol})");
-                var filingTasks = new[]// Fetch filings concurrently (10-K and 10-Q)
+                var filingTasks = new[]
                 {
-            StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-K"),
-            StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-Q")
+            StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-K"), //Fetch 10-K
+            StockScraperV3.URL.GetFilingUrlsForLast10Years(localCompany.cik.ToString(), "10-Q")  //Fetch 10-Q
         };
-                var filingsResults = await Task.WhenAll(filingTasks);
-                var filings = filingsResults
-                    .SelectMany(f => f)
-                    .DistinctBy(f => f.url)
-                    .Select(f => (f.url, f.description))
-                    .ToList();
+                var filingsResults = await Task.WhenAll(filingTasks); //Wait for both tasks
+                var filings = filingsResults.SelectMany(f => f).DistinctBy(f => f.url).Select(f => (f.url, f.description)).ToList(); //Combine and remove duplicates
                 if (!filings.Any())
                 {
                     Console.WriteLine($"No filings found for {localCompany.companyName} ({localCompany.symbol})");
@@ -489,15 +1021,15 @@ namespace StockScraperV3
                 }
                 var chromeDriverTasks = new List<Task>();
                 foreach (var filing in filings)
-                { // Semaphore ensures only 5 tasks run concurrently
-                    await semaphore.WaitAsync();
+                {
+                    await semaphore.WaitAsync(); //Wait for a slot
                     chromeDriverTasks.Add(Task.Run(async () =>
                     {
                         ChromeDriver driver = null;
                         try
                         {
-                            driver = await driverPool.GetDriverAsync();
-                            await ProcessFilingAsync(filing, localCompany, driver, dataNonStatic);
+                            driver = await driverPool.GetDriverAsync(); //Get a driver from the pool
+                            await ProcessFilingAsync(filing, localCompany, driver, dataNonStatic); //Process the filing
                         }
                         catch (Exception ex)
                         {
@@ -507,45 +1039,38 @@ namespace StockScraperV3
                         {
                             if (driver != null)
                             {
-                                driverPool.ReturnDriver(driver);
+                                driverPool.ReturnDriver(driver); //Return driver to pool
                             }
-                            semaphore.Release(); // Release the semaphore after task completion
+                            semaphore.Release(); //Release the semaphore
                         }
                     }));
                 }
-                await Task.WhenAll(chromeDriverTasks);    // **Step 1: Adjust Q2 and Q3 Cashflows from Cumulative to Actual Values**
-                var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(localCompany.companyId);
-                var currentFiscalYear = GetCurrentFiscalYear(companyData);
-                var entriesForYear = companyData.FinancialEntries.Values
-                    .Where(e => e.Year == currentFiscalYear)
-                    .ToList();
+                await Task.WhenAll(chromeDriverTasks); //Wait for all filings to be processed
+                var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(localCompany.companyId); //Load company data
+                var currentFiscalYear = GetCurrentFiscalYear(companyData); //Get current fiscal year
+                var entriesForYear = companyData.FinancialEntries.Values.Where(e => e.Year == currentFiscalYear).ToList(); //Entries of that year
                 var Q1entry = entriesForYear.FirstOrDefault(e => e.Quarter == 1);
                 var Q2entry = entriesForYear.FirstOrDefault(e => e.Quarter == 2);
                 var Q3entry = entriesForYear.FirstOrDefault(e => e.Quarter == 3);
                 if (Q1entry != null && Q2entry != null && Q3entry != null)
-                {// Gather all keys that appear in these quarters
-                    var allKeys = new HashSet<string>(
-                        Q1entry.FinancialValues.Keys
-                        .Concat(Q2entry.FinancialValues.Keys)
-                        .Concat(Q3entry.FinancialValues.Keys),
-                        StringComparer.OrdinalIgnoreCase);
+                {
+                    var allKeys = new HashSet<string>(Q1entry.FinancialValues.Keys.Concat(Q2entry.FinancialValues.Keys).Concat(Q3entry.FinancialValues.Keys), StringComparer.OrdinalIgnoreCase);
                     foreach (var key in allKeys)
-                    {    // We only adjust HTML-based Cashflow items
+                    {
                         if (key.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
                         {
                             string statementType = Data.Data.GetStatementType(key).ToLowerInvariant();
                             bool isCashFlow = statementType.Contains("cashflow");
                             if (isCashFlow)
-                            {    // Extract the base element name by removing the quarter report part
+                            {
                                 string baseKey = RemoveQuarterFromElementName(key);
-                                string q1Key = AdjustElementNameForQuarter(baseKey, 1);// Construct correct quarter-specific keys
+                                string q1Key = AdjustElementNameForQuarter(baseKey, 1);
                                 string q2Key = AdjustElementNameForQuarter(baseKey, 2);
                                 string q3Key = AdjustElementNameForQuarter(baseKey, 3);
-                                // Extract numeric values using the updated ExtractNumericValue method
                                 decimal Q1_cum = ExtractNumericValue(Q1entry.FinancialValues.TryGetValue(q1Key, out var Q1_obj) ? Q1_obj : null, q1Key);
                                 decimal Q2_cum = ExtractNumericValue(Q2entry.FinancialValues.TryGetValue(q2Key, out var Q2_obj) ? Q2_obj : null, q2Key);
                                 decimal Q3_cum = ExtractNumericValue(Q3entry.FinancialValues.TryGetValue(q3Key, out var Q3_obj) ? Q3_obj : null, q3Key);
-                                if (Q2_cum == 0 || Q3_cum == 0)// Ensure Q2_cum and Q3_cum are valid
+                                if (Q2_cum == 0 || Q3_cum == 0)
                                 {
                                     Console.WriteLine($"[WARNING] Invalid cumulative value for {baseKey}. Q2_cum: {Q2_cum}, Q3_cum: {Q3_cum}. Skipping adjustment.");
                                     continue;
@@ -556,17 +1081,18 @@ namespace StockScraperV3
                                 {
                                     Console.WriteLine($"[WARNING] Negative actual values for {baseKey}. Q2_actual: {Q2_actual}, Q3_actual: {Q3_actual}. Skipping.");
                                     continue;
-                                }     // Update the entries with actual values
+                                }
                                 Q2entry.FinancialValues[q2Key] = Q2_actual;
                                 Q3entry.FinancialValues[q3Key] = Q3_actual;
                             }
                         }
                     }
                 }
-                var adjustedEntries = companyData.GetCompletedEntries();
+                Data.Data.AdjustAnnualReportYears(companyData); //Call the adjust method here before saving
+                var adjustedEntries = companyData.GetCompletedEntries(); //Get completed entries
                 if (adjustedEntries.Any())
                 {
-                    await dataNonStatic.SaveAllEntriesToDatabaseAsync(localCompany.companyId);
+                    await dataNonStatic.SaveAllEntriesToDatabaseAsync(localCompany.companyId); //Save to DB
                 }
                 else
                 {
@@ -579,7 +1105,7 @@ namespace StockScraperV3
                     {
                         try
                         {
-                            await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic);
+                            await Data.Data.CalculateAndSaveQ4InDatabaseAsync(connection, transaction, localCompany.companyId, dataNonStatic); //Q4 calculation
                             transaction.Commit();
                         }
                         catch (Exception ex)
@@ -599,55 +1125,41 @@ namespace StockScraperV3
                 }
                 Console.WriteLine($"Finished processing for {localCompany.companyName} ({localCompany.symbol})");
             }
-            driverPool.Dispose(); // Dispose of the driver pool after processing
-            semaphore.Dispose(); // Dispose of the semaphore
+            driverPool.Dispose(); //Dispose driver pool
+            semaphore.Dispose();  //Dispose semaphore
         }
+
         public static async Task ContinueScrapingUnscrapedCompaniesAsync()
         {
             try
-            {      // 1. Retrieve unscraped companies from the database
-                var unscrapedCompanies = await GetCompaniesWithHigherCompanyIDAsync();
+            {
+                var unscrapedCompanies = await GetCompaniesWithHigherCompanyIDAsync(); //Get unscraped companies
                 Console.WriteLine($"[INFO] Retrieved {unscrapedCompanies.Count} unscraped companies.");
-
                 if (!unscrapedCompanies.Any())
                 {
                     Console.WriteLine("[INFO] No unscraped companies found.");
                     return;
                 }
-
-                // 2. Initialize ChromeDriverPool and concurrency control
-                using (var driverPool = new ChromeDriverPool(5))
+                using (var driverPool = new ChromeDriverPool(10))
                 {
                     var semaphore = new SemaphoreSlim(5, 5);
-                    var dataNonStatic = new DataNonStatic(); // Shared instance for financial data processing
-
+                    var dataNonStatic = new DataNonStatic();
                     foreach (var company in unscrapedCompanies)
                     {
                         Console.WriteLine($"[INFO] Processing company: {company.companyName} ({company.symbol})");
-
-                        // 3. Fetch filings for the current unscraped company (10-K and 10-Q), similar to RunScraperAsync
                         var filingTasks = new[]
                         {
                     GetFilingUrlsForLast10Years(company.cik.ToString(), "10-K"),
                     GetFilingUrlsForLast10Years(company.cik.ToString(), "10-Q")
                 };
-
                         var filingsResults = await Task.WhenAll(filingTasks);
-                        var filings = filingsResults
-                            .SelectMany(f => f)
-                            .DistinctBy(f => f.url)
-                            .Select(f => (f.url, f.description))
-                            .ToList();
-
+                        var filings = filingsResults.SelectMany(f => f).DistinctBy(f => f.url).Select(f => (f.url, f.description)).ToList();
                         if (!filings.Any())
                         {
                             Console.WriteLine($"[INFO] No filings found for {company.companyName} ({company.symbol}).");
-                            continue; // Move on to the next unscraped company
+                            continue;
                         }
-
                         Console.WriteLine($"[INFO] Found {filings.Count} filings for {company.companyName} ({company.symbol}).");
-
-                        // 4. Process each filing in parallel using up to 5 ChromeDrivers, just like in RunScraperAsync
                         var filingProcessingTasks = new List<Task>();
                         foreach (var filing in filings)
                         {
@@ -673,38 +1185,20 @@ namespace StockScraperV3
                                     semaphore.Release();
                                 }
                             });
-
                             filingProcessingTasks.Add(task);
                         }
-
-                        // Wait for all filings to be processed for this company
                         await Task.WhenAll(filingProcessingTasks);
-
-                        // 5. Post-Processing Steps (Similar to RunScraperAsync):
-                        // After processing all filings, adjust Q2 and Q3 cashflows, save entries, and perform Q4 calculations
-
                         var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(company.companyId);
                         var currentFiscalYear = GetCurrentFiscalYear(companyData);
-                        var entriesForYear = companyData.FinancialEntries.Values
-                            .Where(e => e.Year == currentFiscalYear)
-                            .ToList();
-
+                        var entriesForYear = companyData.FinancialEntries.Values.Where(e => e.Year == currentFiscalYear).ToList();
                         var Q1entry = entriesForYear.FirstOrDefault(e => e.Quarter == 1);
                         var Q2entry = entriesForYear.FirstOrDefault(e => e.Quarter == 2);
                         var Q3entry = entriesForYear.FirstOrDefault(e => e.Quarter == 3);
-
                         if (Q1entry != null && Q2entry != null && Q3entry != null)
                         {
-                            // Gather all keys from these quarters
-                            var allKeys = new HashSet<string>(
-                                Q1entry.FinancialValues.Keys
-                                .Concat(Q2entry.FinancialValues.Keys)
-                                .Concat(Q3entry.FinancialValues.Keys),
-                                StringComparer.OrdinalIgnoreCase);
-
+                            var allKeys = new HashSet<string>(Q1entry.FinancialValues.Keys.Concat(Q2entry.FinancialValues.Keys).Concat(Q3entry.FinancialValues.Keys), StringComparer.OrdinalIgnoreCase);
                             foreach (var key in allKeys)
                             {
-                                // We only adjust HTML-based Cashflow items
                                 if (key.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
                                 {
                                     string statementType = Data.Data.GetStatementType(key).ToLowerInvariant();
@@ -712,31 +1206,24 @@ namespace StockScraperV3
                                     if (isCashFlow)
                                     {
                                         string baseKey = RemoveQuarterFromElementName(key);
-
                                         string q1Key = AdjustElementNameForQuarter(baseKey, 1);
                                         string q2Key = AdjustElementNameForQuarter(baseKey, 2);
                                         string q3Key = AdjustElementNameForQuarter(baseKey, 3);
-
                                         decimal Q1_cum = ExtractNumericValue(Q1entry.FinancialValues.TryGetValue(q1Key, out var Q1_obj) ? Q1_obj : null, q1Key);
                                         decimal Q2_cum = ExtractNumericValue(Q2entry.FinancialValues.TryGetValue(q2Key, out var Q2_obj) ? Q2_obj : null, q2Key);
                                         decimal Q3_cum = ExtractNumericValue(Q3entry.FinancialValues.TryGetValue(q3Key, out var Q3_obj) ? Q3_obj : null, q3Key);
-
                                         if (Q2_cum == 0 || Q3_cum == 0)
                                         {
                                             Console.WriteLine($"[WARNING] Invalid cumulative value for {baseKey}. Q2_cum: {Q2_cum}, Q3_cum: {Q3_cum}. Skipping adjustment.");
                                             continue;
                                         }
-
                                         decimal Q2_actual = Q2_cum - Q1_cum;
                                         decimal Q3_actual = Q3_cum - Q2_cum;
-
                                         if (Q2_actual < 0 || Q3_actual < 0)
                                         {
                                             Console.WriteLine($"[WARNING] Negative actual values for {baseKey}. Q2_actual: {Q2_actual}, Q3_actual: {Q3_actual}. Skipping.");
                                             continue;
                                         }
-
-                                        // Update entries with actual values
                                         Q2entry.FinancialValues[q2Key] = Q2_actual;
                                         Q3entry.FinancialValues[q3Key] = Q3_actual;
                                     }
@@ -747,7 +1234,7 @@ namespace StockScraperV3
                         {
                             Console.WriteLine($"[WARNING] Missing Q1, Q2, or Q3 entries for {company.companyName} ({company.symbol}). Skipping cashflow adjustments.");
                         }
-
+                        Data.Data.AdjustAnnualReportYears(companyData); //Call the adjust method here before saving
                         var adjustedEntries = companyData.GetCompletedEntries();
                         if (adjustedEntries.Any())
                         {
@@ -757,8 +1244,6 @@ namespace StockScraperV3
                         {
                             Console.WriteLine($"[INFO] No completed entries to save for {company.companyName} ({company.symbol}).");
                         }
-
-                        // Perform Q4 Calculations
                         using (SqlConnection connection = new SqlConnection(connectionString))
                         {
                             await connection.OpenAsync();
@@ -784,13 +1269,10 @@ namespace StockScraperV3
                                 }
                             }
                         }
-
                         Console.WriteLine($"Finished processing for {company.companyName} ({company.symbol})");
                     }
-
                     semaphore.Dispose();
                 }
-
                 Console.WriteLine("[INFO] RunScraperForUnscrapedCompaniesAsync completed successfully.");
             }
             catch (Exception ex)
@@ -798,55 +1280,39 @@ namespace StockScraperV3
                 Console.WriteLine($"[ERROR] Exception in RunScraperForUnscrapedCompaniesAsync: {ex.Message}");
             }
         }
+
         public static async Task RunScraperForUnscrapedCompaniesAsync()
         {
             try
             {
                 Console.WriteLine("[INFO] Starting RunScraperForUnscrapedCompaniesAsync.");
-
-                // 1. Retrieve unscraped companies from the database
-                var unscrapedCompanies = await GetUnscrapedCompaniesFromDatabase();
+                var unscrapedCompanies = await GetUnscrapedCompaniesFromDatabase(); //Get unscraped companies
                 Console.WriteLine($"[INFO] Retrieved {unscrapedCompanies.Count} unscraped companies.");
-
                 if (!unscrapedCompanies.Any())
                 {
                     Console.WriteLine("[INFO] No unscraped companies found.");
                     return;
                 }
-
-                // 2. Initialize ChromeDriverPool and concurrency control
-                using (var driverPool = new ChromeDriverPool(5))
+                using (var driverPool = new ChromeDriverPool(10))
                 {
                     var semaphore = new SemaphoreSlim(5, 5);
-                    var dataNonStatic = new DataNonStatic(); // Shared instance for financial data processing
-
+                    var dataNonStatic = new DataNonStatic();
                     foreach (var company in unscrapedCompanies)
                     {
                         Console.WriteLine($"[INFO] Processing company: {company.companyName} ({company.symbol})");
-
-                        // 3. Fetch filings for the current unscraped company (10-K and 10-Q), similar to RunScraperAsync
                         var filingTasks = new[]
                         {
                     GetFilingUrlsForLast10Years(company.cik.ToString(), "10-K"),
                     GetFilingUrlsForLast10Years(company.cik.ToString(), "10-Q")
                 };
-
                         var filingsResults = await Task.WhenAll(filingTasks);
-                        var filings = filingsResults
-                            .SelectMany(f => f)
-                            .DistinctBy(f => f.url)
-                            .Select(f => (f.url, f.description))
-                            .ToList();
-
+                        var filings = filingsResults.SelectMany(f => f).DistinctBy(f => f.url).Select(f => (f.url, f.description)).ToList();
                         if (!filings.Any())
                         {
                             Console.WriteLine($"[INFO] No filings found for {company.companyName} ({company.symbol}).");
-                            continue; // Move on to the next unscraped company
+                            continue;
                         }
-
                         Console.WriteLine($"[INFO] Found {filings.Count} filings for {company.companyName} ({company.symbol}).");
-
-                        // 4. Process each filing in parallel using up to 5 ChromeDrivers, just like in RunScraperAsync
                         var filingProcessingTasks = new List<Task>();
                         foreach (var filing in filings)
                         {
@@ -872,38 +1338,20 @@ namespace StockScraperV3
                                     semaphore.Release();
                                 }
                             });
-
                             filingProcessingTasks.Add(task);
                         }
-
-                        // Wait for all filings to be processed for this company
                         await Task.WhenAll(filingProcessingTasks);
-
-                        // 5. Post-Processing Steps (Similar to RunScraperAsync):
-                        // After processing all filings, adjust Q2 and Q3 cashflows, save entries, and perform Q4 calculations
-
                         var companyData = await dataNonStatic.GetOrLoadCompanyFinancialDataAsync(company.companyId);
                         var currentFiscalYear = GetCurrentFiscalYear(companyData);
-                        var entriesForYear = companyData.FinancialEntries.Values
-                            .Where(e => e.Year == currentFiscalYear)
-                            .ToList();
-
+                        var entriesForYear = companyData.FinancialEntries.Values.Where(e => e.Year == currentFiscalYear).ToList();
                         var Q1entry = entriesForYear.FirstOrDefault(e => e.Quarter == 1);
                         var Q2entry = entriesForYear.FirstOrDefault(e => e.Quarter == 2);
                         var Q3entry = entriesForYear.FirstOrDefault(e => e.Quarter == 3);
-
                         if (Q1entry != null && Q2entry != null && Q3entry != null)
                         {
-                            // Gather all keys from these quarters
-                            var allKeys = new HashSet<string>(
-                                Q1entry.FinancialValues.Keys
-                                .Concat(Q2entry.FinancialValues.Keys)
-                                .Concat(Q3entry.FinancialValues.Keys),
-                                StringComparer.OrdinalIgnoreCase);
-
+                            var allKeys = new HashSet<string>(Q1entry.FinancialValues.Keys.Concat(Q2entry.FinancialValues.Keys).Concat(Q3entry.FinancialValues.Keys), StringComparer.OrdinalIgnoreCase);
                             foreach (var key in allKeys)
                             {
-                                // We only adjust HTML-based Cashflow items
                                 if (key.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
                                 {
                                     string statementType = Data.Data.GetStatementType(key).ToLowerInvariant();
@@ -911,31 +1359,24 @@ namespace StockScraperV3
                                     if (isCashFlow)
                                     {
                                         string baseKey = RemoveQuarterFromElementName(key);
-
                                         string q1Key = AdjustElementNameForQuarter(baseKey, 1);
                                         string q2Key = AdjustElementNameForQuarter(baseKey, 2);
                                         string q3Key = AdjustElementNameForQuarter(baseKey, 3);
-
                                         decimal Q1_cum = ExtractNumericValue(Q1entry.FinancialValues.TryGetValue(q1Key, out var Q1_obj) ? Q1_obj : null, q1Key);
                                         decimal Q2_cum = ExtractNumericValue(Q2entry.FinancialValues.TryGetValue(q2Key, out var Q2_obj) ? Q2_obj : null, q2Key);
                                         decimal Q3_cum = ExtractNumericValue(Q3entry.FinancialValues.TryGetValue(q3Key, out var Q3_obj) ? Q3_obj : null, q3Key);
-
                                         if (Q2_cum == 0 || Q3_cum == 0)
                                         {
                                             Console.WriteLine($"[WARNING] Invalid cumulative value for {baseKey}. Q2_cum: {Q2_cum}, Q3_cum: {Q3_cum}. Skipping adjustment.");
                                             continue;
                                         }
-
                                         decimal Q2_actual = Q2_cum - Q1_cum;
                                         decimal Q3_actual = Q3_cum - Q2_cum;
-
                                         if (Q2_actual < 0 || Q3_actual < 0)
                                         {
                                             Console.WriteLine($"[WARNING] Negative actual values for {baseKey}. Q2_actual: {Q2_actual}, Q3_actual: {Q3_actual}. Skipping.");
                                             continue;
                                         }
-
-                                        // Update entries with actual values
                                         Q2entry.FinancialValues[q2Key] = Q2_actual;
                                         Q3entry.FinancialValues[q3Key] = Q3_actual;
                                     }
@@ -946,7 +1387,7 @@ namespace StockScraperV3
                         {
                             Console.WriteLine($"[WARNING] Missing Q1, Q2, or Q3 entries for {company.companyName} ({company.symbol}). Skipping cashflow adjustments.");
                         }
-
+                        Data.Data.AdjustAnnualReportYears(companyData); //Call the adjust method here before saving
                         var adjustedEntries = companyData.GetCompletedEntries();
                         if (adjustedEntries.Any())
                         {
@@ -956,8 +1397,6 @@ namespace StockScraperV3
                         {
                             Console.WriteLine($"[INFO] No completed entries to save for {company.companyName} ({company.symbol}).");
                         }
-
-                        // Perform Q4 Calculations
                         using (SqlConnection connection = new SqlConnection(connectionString))
                         {
                             await connection.OpenAsync();
@@ -983,13 +1422,10 @@ namespace StockScraperV3
                                 }
                             }
                         }
-
                         Console.WriteLine($"Finished processing for {company.companyName} ({company.symbol})");
                     }
-
                     semaphore.Dispose();
                 }
-
                 Console.WriteLine("[INFO] RunScraperForUnscrapedCompaniesAsync completed successfully.");
             }
             catch (Exception ex)
@@ -997,6 +1433,7 @@ namespace StockScraperV3
                 Console.WriteLine($"[ERROR] Exception in RunScraperForUnscrapedCompaniesAsync: {ex.Message}");
             }
         }
+
 
 
         private static async Task<List<(int companyId, string companyName, string symbol, int cik)>> GetUnscrapedCompaniesFromDatabase()
@@ -1297,3 +1734,21 @@ namespace StockScraperV3
         }
     }
 }
+
+
+//WITH DuplicateEntries AS (
+//    SELECT
+//        *,
+//        ROW_NUMBER() OVER (PARTITION BY Year, CompanyID, Quarter ORDER BY EndDate ASC) AS RowNum,
+//        COUNT(*) OVER (PARTITION BY Year, CompanyID, Quarter) AS TotalCount
+//    FROM
+//        FinancialData
+//    WHERE
+//        Quarter = 0
+//)
+//UPDATE DuplicateEntries
+//SET
+//    Year = Year - 1
+//WHERE
+//    RowNum = 1
+//    AND TotalCount > 1;

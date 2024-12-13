@@ -92,13 +92,31 @@ namespace Data
             }
         }
         private string GenerateKey(FinancialDataEntry entry)
-        {    // Format the dates to a consistent string format (e.g., yyyyMMdd)
+        {
+            // Format the dates to a consistent string format (e.g., yyyyMMdd)
             string startDateStr = entry.StartDate.ToString("yyyyMMdd");
             string endDateStr = entry.EndDate.ToString("yyyyMMdd");
-            int fiscalYear = Data.GetFiscalYear(entry.StandardEndDate, entry.Quarter, entry.FiscalYearEndDate);
+
+            int fiscalYear;
+
+            if (entry.Quarter == 0)
+            {
+                // For annual reports, subtract 10 days from EndDate to determine the fiscal year
+                DateTime adjustedEndDate = entry.EndDate.AddDays(-10);
+                fiscalYear = adjustedEndDate.Year;
+            }
+            else
+            {
+                // For other quarters, use the existing fiscal year determination logic
+                fiscalYear = Data.GetFiscalYear(entry.StandardEndDate, entry.Quarter, entry.FiscalYearEndDate);
+            }
+
+            // Construct the unique key based on CompanyID, Fiscal Year, Quarter, StartDate, and EndDate
             string key = $"{entry.CompanyID}_FY{fiscalYear}_Q{entry.Quarter}_{startDateStr}_{endDateStr}";
+
             return key;
         }
+
         public List<FinancialDataEntry> GetCompletedEntries()// Method to retrieve all completed entries
         {
             return FinancialEntries.Values.Where(entry => entry.IsEntryComplete()).ToList();
@@ -301,6 +319,16 @@ WHERE CompanyID = @CompanyID";
     }
     public static class Data
     {
+        public static void AdjustAnnualReportYears(CompanyFinancialData companyData) 
+        { 
+            foreach (var entry in companyData.FinancialEntries.Values) 
+            { 
+                if (entry.Quarter == 0 && entry.EndDate.AddDays(-10).Year < entry.EndDate.Year) 
+                    entry.Year = entry.EndDate.AddDays(-10).Year; 
+            } 
+        } 
+    
+
         public static async Task<(int fiscalYear, int quarter, DateTime fiscalYearEndDate)> DetermineFiscalYearAndQuarterAsync(int companyId, DateTime reportEndDate, DataNonStatic dataNonStatic)
         {
             try
