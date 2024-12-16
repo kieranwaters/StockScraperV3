@@ -484,6 +484,11 @@ WHERE CompanyID = @CompanyID";
         }
         private static string AdjustElementNameForAnnual(string elementName)
         {
+            if (string.IsNullOrEmpty(elementName))
+            {
+                throw new ArgumentNullException(nameof(elementName), "The element name cannot be null or empty.");
+            }
+
             if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
             {
                 // Simply return the elementName as is for Quarter 0
@@ -494,6 +499,7 @@ WHERE CompanyID = @CompanyID";
                 return elementName;
             }
         }
+
         public static string AdjustElementNameForQuarter(string elementName, int quarter)
         {
             if (elementName.StartsWith("HTML_", StringComparison.OrdinalIgnoreCase))
