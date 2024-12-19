@@ -12,6 +12,7 @@ using System.Net;
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Nasdaq100FinancialScraper;
+using Newtonsoft.Json.Linq;
 
 namespace StockScraperV3
 {
@@ -119,6 +120,93 @@ namespace StockScraperV3
             var sanitized = Regex.Replace(input, @"[^a-zA-Z0-9\s]", "");// Remove any non-alphanumeric characters            
             var normalised = sanitized.ToUpper().Replace(" ", "_");// Convert to uppercase and replace spaces with underscores
             return normalised;
+        }
+        public void ExtractAndOutputUniqueXbrlElements()
+        {
+            // HashSet to store RawElementNames from XBRLDataTypes for quick lookup
+            HashSet<string> rawElementNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // HashSet to keep track of already outputted element names to prevent duplicates
+            HashSet<string> outputtedElements = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                using (SqlConnection connection = new SqlConnection(connectionString))
+                {
+                    connection.Open();
+
+                    // Step 1: Retrieve all RawElementNames from XBRLDataTypes
+                    string rawElementNamesQuery = "SELECT RawElementName FROM XBRLDataTypes";
+                    using (SqlCommand cmd = new SqlCommand(rawElementNamesQuery, connection))
+                    using (SqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            if (!reader.IsDBNull(0))
+                            {
+                                string rawElementName = reader.GetString(0).Trim();
+                                if (!string.IsNullOrEmpty(rawElementName))
+                                {
+                                    rawElementNames.Add(rawElementName);
+                                }
+                            }
+                        }
+                    }
+
+                    // Step 2: Retrieve FinancialDataJSON from FinancialData
+                    string financialDataQuery = "SELECT FinancialDataJSON FROM FinancialData";
+                    using (SqlCommand cmd = new SqlCommand(financialDataQuery, connection))
+                    using (SqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            if (reader.IsDBNull(0))
+                                continue;
+
+                            string json = reader.GetString(0);
+                            if (string.IsNullOrWhiteSpace(json))
+                                continue;
+
+                            JObject financialData;
+                            try
+                            {
+                                financialData = JObject.Parse(json);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Error parsing JSON: {ex.Message}");
+                                continue; // Skip this row and continue with the next
+                            }
+
+                            foreach (var property in financialData.Properties())
+                            {
+                                string key = property.Name;
+
+                                // Skip keys containing "HTML"
+                                if (key.IndexOf("HTML", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    continue;
+
+                                // Check if the key is not in RawElementNames and hasn't been outputted yet
+                                if (!rawElementNames.Contains(key) && !outputtedElements.Contains(key))
+                                {
+                                    Console.WriteLine(key);
+                                    outputtedElements.Add(key);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (SqlException sqlEx)
+            {
+                Console.WriteLine($"Database error occurred: {sqlEx.Message}");
+                // Handle or log exception as needed
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"An unexpected error occurred: {ex.Message}");
+                // Handle or log exception as needed
+            }
         }
         public static async Task ProcessFilings(ChromeDriver driver, List<(string url, string description)> filings, string companyName, string companySymbol, int companyId, int groupIndex, DataNonStatic dataNonStatic) // Accept shared DataNonStatic instance
         {
@@ -267,7 +355,7 @@ namespace StockScraperV3
                 using (var driverPool = new ChromeDriverPool(5))
                 {
                     var semaphore = new SemaphoreSlim(5, 5);
-                    var filingTypes = new[] { "10-K", "10-Q", "20-F", "6-K", "40-F" };
+                    var filingTypes = new[] { "10-K", "10-Q", "20-F", "6-K", "40-F", "8-K" };
 
                     var filingTasks = filingTypes.Select(async filingType =>
                     {
