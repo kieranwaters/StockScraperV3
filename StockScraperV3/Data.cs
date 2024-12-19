@@ -146,7 +146,7 @@ namespace Data
     {
         public static bool IsEntryComplete(this FinancialDataEntry entry)
         {
-            return entry.IsXbrlParsed && entry.IsHtmlParsed;
+            return entry.IsXbrlParsed || entry.IsHtmlParsed;
         }
     }
     public class DataNonStatic
@@ -342,8 +342,7 @@ WHERE CompanyID = @CompanyID";
                 if (entry.Quarter == 0 && entry.EndDate.AddDays(-10).Year < entry.EndDate.Year) 
                     entry.Year = entry.EndDate.AddDays(-10).Year; 
             } 
-        } 
-    
+        }    
 
         public static async Task<(int fiscalYear, int quarter, DateTime fiscalYearEndDate)> DetermineFiscalYearAndQuarterAsync(int companyId, DateTime reportEndDate, DataNonStatic dataNonStatic)
         {

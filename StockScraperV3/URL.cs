@@ -208,45 +208,201 @@ namespace StockScraperV3
                 // Handle or log exception as needed
             }
         }
-        public static async Task ProcessFilings(ChromeDriver driver, List<(string url, string description)> filings, string companyName, string companySymbol, int companyId, int groupIndex, DataNonStatic dataNonStatic) // Accept shared DataNonStatic instance
+        //public static async Task ProcessFilings(ChromeDriver driver, List<(string url, string description)> filings, string companyName, string companySymbol, int companyId, int groupIndex, DataNonStatic dataNonStatic) // Accept shared DataNonStatic instance
+        //{
+        //    int parsedReportsCount = 0;
+        //    int totalReportsToParse = filings.Count(filing => filing.description.Contains("10-K") || filing.description.Contains("10-Q"));
+        //    foreach (var filing in filings) // Process each filing
+        //    {
+        //        string url = filing.url;
+        //        string description = filing.description;
+        //        bool isAnnualReport = description.Contains("10-K");
+        //        bool isQuarterlyReport = description.Contains("10-Q");
+        //        bool isHtmlParsed = false;
+        //        bool isXbrlParsed = false;
+        //        int retries = 3;
+        //        for (int attempt = 0; attempt < retries; attempt++)
+        //        {
+        //            try
+        //            {    // XBRL Parsing
+        //                var (xbrlUrl, isIxbrl) = await XBRL.XBRL.GetXbrlUrl(url);
+        //                if (!string.IsNullOrEmpty(xbrlUrl))
+        //                {
+        //                    await XBRL.XBRL.DownloadAndParseXbrlData(xbrlUrl, isAnnualReport, companyName, companySymbol, 
+        //                        async (content, isAnnual, name, symbol) =>
+        //                        {
+        //                            if (isIxbrl)
+        //                            {
+        //                                await XBRL.XBRL.ParseInlineXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
+        //                            }
+        //                            else
+        //                            {
+        //                                await XBRL.XBRL.ParseTraditionalXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
+        //                            }
+        //                        },
+        //                        async (content, isAnnual, name, symbol) =>
+        //                        {
+        //                            if (!isIxbrl)
+        //                            {
+        //                                await XBRL.XBRL.ParseInlineXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
+        //                            }
+        //                        });
+        //                    isXbrlParsed = true;
+        //                }
+        //                else
+        //                {
+        //                    Console.WriteLine($"[WARNING] No XBRL URL obtained for {companyName} ({companySymbol}) filing: {description}");
+        //                }
+        //            }
+        //            catch (Exception ex)
+        //            {
+        //                if (attempt == retries - 1)
+        //                {
+        //                    Console.WriteLine($"[ERROR] XBRL Parsing failed for {companyName} ({companySymbol}) on attempt {attempt + 1}: {ex.Message}");
+        //                    throw;
+        //                }
+        //                Console.WriteLine($"[WARNING] XBRL Parsing attempt {attempt + 1} failed for {companyName} ({companySymbol}): {ex.Message}");
+        //                await Task.Delay(1000); // Optional: Add delay before retrying
+        //                continue;
+        //            }
+        //            try
+        //            {
+        //                // HTML Parsing
+        //                string? interactiveDataUrl = await URL.GetInteractiveDataUrl(url);
+        //                if (!string.IsNullOrEmpty(interactiveDataUrl))
+        //                {
+        //                    await HTML.HTML.ProcessInteractiveData(driver, interactiveDataUrl, companyName, companySymbol, isAnnualReport, url, companyId, dataNonStatic);
+        //                    isHtmlParsed = true;
+        //                }
+        //                else
+        //                {
+        //                    Console.WriteLine($"[WARNING] No Interactive Data URL obtained for {companyName} ({companySymbol}) filing: {description}");
+        //                }
+        //            }
+        //            catch (WebDriverException ex)
+        //            {
+        //                if (ex.Message.Contains("disconnected"))
+        //                {
+        //                    Console.WriteLine($"[ERROR] ChromeDriver disconnected for {companyName}. Attempt {attempt + 1} of {retries}.");
+        //                    throw; // Let the calling method handle driver replacement via the pool
+        //                }
+        //                else
+        //                {
+        //                    Console.WriteLine($"[ERROR] WebDriverException for {companyName}: {ex.Message}");
+        //                    if (attempt == retries - 1)
+        //                    {
+        //                        throw;
+        //                    }
+        //                    Console.WriteLine($"[WARNING] HTML Parsing attempt {attempt + 1} failed for {companyName}: {ex.Message}");
+        //                    await Task.Delay(1000); // Optional: Add delay before retrying
+        //                    continue;
+        //                }
+        //            }
+        //            catch (Exception ex)
+        //            {
+        //                if (attempt == retries - 1)
+        //                {
+        //                    Console.WriteLine($"[ERROR] HTML Parsing failed for {companyName} ({companySymbol}) on attempt {attempt + 1}: {ex.Message}");
+        //                    throw;
+        //                }
+        //                Console.WriteLine($"[WARNING] HTML Parsing attempt {attempt + 1} failed for {companyName} ({companySymbol}): {ex.Message}");
+        //                await Task.Delay(1000); // Optional: Add delay before retrying
+        //                continue;
+        //            }
+        //            break; // Exit retry loop if successful
+        //        }
+        //    }
+
+        //}
+        public static async Task ProcessFilings(
+    ChromeDriver driver,
+    List<(string url, string description)> filings,
+    string companyName,
+    string companySymbol,
+    int companyId,
+    int groupIndex,
+    DataNonStatic dataNonStatic)
         {
             int parsedReportsCount = 0;
-            int totalReportsToParse = filings.Count(filing => filing.description.Contains("10-K") || filing.description.Contains("10-Q"));
+
+            // Update totalReportsToParse to include all relevant report types
+            int totalReportsToParse = filings.Count(filing =>
+                filing.description.Contains("10-K", StringComparison.OrdinalIgnoreCase) ||
+                filing.description.Contains("10-Q", StringComparison.OrdinalIgnoreCase) ||
+                filing.description.Contains("20-F", StringComparison.OrdinalIgnoreCase) ||
+                filing.description.Contains("6-K", StringComparison.OrdinalIgnoreCase) ||
+                filing.description.Contains("40-F", StringComparison.OrdinalIgnoreCase) ||
+                filing.description.Contains("8-K", StringComparison.OrdinalIgnoreCase));
+
             foreach (var filing in filings) // Process each filing
             {
                 string url = filing.url;
                 string description = filing.description;
-                bool isAnnualReport = description.Contains("10-K");
-                bool isQuarterlyReport = description.Contains("10-Q");
+
+                // Extract the report type from the description
+                string reportType = ExtractReportType(description);
+                ReportCategory category = GetReportCategory(reportType);
+
+                bool isAnnualReport = category == ReportCategory.Annual;
+                bool isQuarterlyReport = category == ReportCategory.Quarterly;
+                bool isCurrentReport = category == ReportCategory.Current;
+
                 bool isHtmlParsed = false;
                 bool isXbrlParsed = false;
                 int retries = 3;
+
                 for (int attempt = 0; attempt < retries; attempt++)
                 {
                     try
-                    {    // XBRL Parsing
+                    {
+                        // XBRL Parsing
                         var (xbrlUrl, isIxbrl) = await XBRL.XBRL.GetXbrlUrl(url);
                         if (!string.IsNullOrEmpty(xbrlUrl))
                         {
-                            await XBRL.XBRL.DownloadAndParseXbrlData(xbrlUrl, isAnnualReport, companyName, companySymbol, 
+                            await XBRL.XBRL.DownloadAndParseXbrlData(
+                                xbrlUrl,
+                                isAnnualReport: isAnnualReport,
+                                companyName: companyName,
+                                companySymbol: companySymbol,
+                                // XBRL Callback for parsing
                                 async (content, isAnnual, name, symbol) =>
                                 {
                                     if (isIxbrl)
                                     {
-                                        await XBRL.XBRL.ParseInlineXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
+                                        await XBRL.XBRL.ParseInlineXbrlContent(
+                                            content,
+                                            isAnnual,
+                                            name,
+                                            symbol,
+                                            dataNonStatic,
+                                            companyId);
                                     }
                                     else
                                     {
-                                        await XBRL.XBRL.ParseTraditionalXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
+                                        await XBRL.XBRL.ParseTraditionalXbrlContent(
+                                            content,
+                                            isAnnual,
+                                            name,
+                                            symbol,
+                                            dataNonStatic,
+                                            companyId);
                                     }
                                 },
+                                // Alternative XBRL Callback
                                 async (content, isAnnual, name, symbol) =>
                                 {
                                     if (!isIxbrl)
                                     {
-                                        await XBRL.XBRL.ParseInlineXbrlContent(content, isAnnual, name, symbol, dataNonStatic, companyId);
+                                        await XBRL.XBRL.ParseInlineXbrlContent(
+                                            content,
+                                            isAnnual,
+                                            name,
+                                            symbol,
+                                            dataNonStatic,
+                                            companyId);
                                     }
                                 });
+
                             isXbrlParsed = true;
                         }
                         else
@@ -261,17 +417,28 @@ namespace StockScraperV3
                             Console.WriteLine($"[ERROR] XBRL Parsing failed for {companyName} ({companySymbol}) on attempt {attempt + 1}: {ex.Message}");
                             throw;
                         }
+
                         Console.WriteLine($"[WARNING] XBRL Parsing attempt {attempt + 1} failed for {companyName} ({companySymbol}): {ex.Message}");
                         await Task.Delay(1000); // Optional: Add delay before retrying
                         continue;
                     }
+
                     try
                     {
                         // HTML Parsing
                         string? interactiveDataUrl = await URL.GetInteractiveDataUrl(url);
                         if (!string.IsNullOrEmpty(interactiveDataUrl))
                         {
-                            await HTML.HTML.ProcessInteractiveData(driver, interactiveDataUrl, companyName, companySymbol, isAnnualReport, url, companyId, dataNonStatic);
+                            await HTML.HTML.ProcessInteractiveData(
+                                driver,
+                                interactiveDataUrl,
+                                companyName,
+                                companySymbol,
+                                isAnnualReport,
+                                url,
+                                companyId,
+                                dataNonStatic);
+
                             isHtmlParsed = true;
                         }
                         else
@@ -281,7 +448,7 @@ namespace StockScraperV3
                     }
                     catch (WebDriverException ex)
                     {
-                        if (ex.Message.Contains("disconnected"))
+                        if (ex.Message.Contains("disconnected", StringComparison.OrdinalIgnoreCase))
                         {
                             Console.WriteLine($"[ERROR] ChromeDriver disconnected for {companyName}. Attempt {attempt + 1} of {retries}.");
                             throw; // Let the calling method handle driver replacement via the pool
@@ -309,13 +476,57 @@ namespace StockScraperV3
                         await Task.Delay(1000); // Optional: Add delay before retrying
                         continue;
                     }
+
+                    // If either XBRL or HTML parsing succeeded, increment the counter
+                    if (isXbrlParsed || isHtmlParsed)
+                    {
+                        parsedReportsCount++;
+                    }
+
                     break; // Exit retry loop if successful
                 }
-            }
 
+                // Optional: Log progress
+                Console.WriteLine($"[INFO] Parsed {parsedReportsCount}/{totalReportsToParse} reports for {companyName} ({companySymbol}).");
+            }
         }
-        
-        private static async Task<(int companyId, string companyName, string symbol, int cik)> GetCompanyBySymbol(string companySymbol)
+            private static string ExtractReportType(string description)
+            {
+                if (string.IsNullOrWhiteSpace(description))
+                    return string.Empty;
+
+                // Example: "10-K Annual Report" -> "10-K"
+                var parts = description.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                return parts.Length > 0 ? parts[0] : string.Empty;
+            }
+            private static ReportCategory GetReportCategory(string reportType)
+            {
+                switch (reportType.ToUpperInvariant())
+                {
+                    case "10-K":
+                    case "20-F":
+                    case "40-F":
+                        return ReportCategory.Annual;
+                    case "10-Q":
+                    case "6-K":
+                        return ReportCategory.Quarterly;
+                    case "8-K":
+                        return ReportCategory.Current;
+                    default:
+                        return ReportCategory.Unknown;
+                }
+            } 
+    private enum ReportCategory
+        {
+            Annual,
+            Quarterly,
+            Current,
+            Unknown
+        }
+    
+
+
+    private static async Task<(int companyId, string companyName, string symbol, int cik)> GetCompanyBySymbol(string companySymbol)
         {
             using (SqlConnection connection = new SqlConnection(connectionString))
             {
@@ -680,6 +891,17 @@ namespace StockScraperV3
             driverPool.Dispose(); //Dispose driver pool
             semaphore.Dispose();  //Dispose semaphore
         }
+        // Define a list of all report types you want to handle
+        private static readonly string[] ReportTypes = new[]
+        {
+    "10-K",
+    "10-Q",
+    "20-F",
+    "6-K",
+    "40-F",
+    "8-K"
+};
+
 
         public static async Task ContinueScrapingUnscrapedCompaniesAsync()
         {
@@ -696,14 +918,12 @@ namespace StockScraperV3
                 {
                     var semaphore = new SemaphoreSlim(5, 5);
                     var dataNonStatic = new DataNonStatic();
+                    var reportTypes = new[] { "10-K", "10-Q", "20-F", "6-K", "40-F", "8-K" };
                     foreach (var company in unscrapedCompanies)
                     {
                         Console.WriteLine($"[INFO] Processing company: {company.companyName} ({company.symbol})");
-                        var filingTasks = new[]
-                        {
-                    GetFilingUrlsForLast10Years(company.cik.ToString(), "10-K"),
-                    GetFilingUrlsForLast10Years(company.cik.ToString(), "10-Q")
-                };
+                        var filingTasks = reportTypes.Select(type =>
+                    GetFilingUrlsForLast10Years(company.cik.ToString(), type)).ToArray();
                         var filingsResults = await Task.WhenAll(filingTasks);
                         var filings = filingsResults.SelectMany(f => f).DistinctBy(f => f.url).Select(f => (f.url, f.description)).ToList();
                         if (!filings.Any())
@@ -849,14 +1069,12 @@ namespace StockScraperV3
                 {
                     var semaphore = new SemaphoreSlim(5, 5);
                     var dataNonStatic = new DataNonStatic();
+                    var reportTypes = new[] { "10-K", "10-Q", "20-F", "6-K", "40-F", "8-K" };
                     foreach (var company in unscrapedCompanies)
                     {
                         Console.WriteLine($"[INFO] Processing company: {company.companyName} ({company.symbol})");
-                        var filingTasks = new[]
-                        {
-                    GetFilingUrlsForLast10Years(company.cik.ToString(), "10-K"),
-                    GetFilingUrlsForLast10Years(company.cik.ToString(), "10-Q")
-                };
+                        var filingTasks = reportTypes.Select(type =>
+                    GetFilingUrlsForLast10Years(company.cik.ToString(), type)).ToArray();
                         var filingsResults = await Task.WhenAll(filingTasks);
                         var filings = filingsResults.SelectMany(f => f).DistinctBy(f => f.url).Select(f => (f.url, f.description)).ToList();
                         if (!filings.Any())
